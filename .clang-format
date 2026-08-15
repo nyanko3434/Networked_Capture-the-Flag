@@ -1,0 +1,9 @@
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++17
+IndentWidth: 4
+ColumnLimit: 100
+AccessModifierOffset: -2
+NamespaceIndentation: None
+SortIncludes: true
+PointerAlignment: Left
