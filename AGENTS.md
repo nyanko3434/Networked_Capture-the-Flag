@@ -109,6 +109,21 @@ Build commands used:
 - Tests:  `cmake --build build --target ctf_tests && ./build/tests/ctf_tests`
 - Server: `./build/ctf_server --port 7777 --tick 30 [--poller poll|epoll]`
 
-Status: ALL PHASES COMPLETE. 86 test cases / ~11.8k assertions green,
-ASan clean, TSan clean on queue stress, live loopback smoke test OK for
-both poller backends.
+Status: ALL PHASES COMPLETE + acceptance closure. 91 test cases /
+~11.9k assertions green, ASan clean, TSan clean on queue stress, live
+loopback smoke test OK for both poller backends.
+
+Acceptance-closure sweep (post-Phase-5):
+- [x] JOIN_REJECT reason InProgress fixed (was always Full) + live
+      mid-match-join test over a real socket
+- [x] Tick-rate stability + stall-resync tests (test_sim_loop.cpp;
+      run(max_ticks) + debug_pre_tick hook; TIMER_ABSTIME pacing and
+      no-catch-up verified)
+- [x] Snapshot-rate decimation test + udp_snapshots_sent counter
+- [x] Grep sweeps: desync literals CLEAN, mutexes only in queues.*,
+      no floats in movement/map paths
+- [x] Poll-vs-epoll benchmark: tools/loadgen.py (n=10 bots) +
+      tools/bench_pollers.sh -> docs/benchmark.md (both ~31.8 Hz,
+      CPU 0.35s vs 0.32s over 8s)
+- Fixed en route: send_udp_snapshots now emits the 8-byte UDP header
+  (README 5.3) with per-tick field; OutboundEvent carries tick.

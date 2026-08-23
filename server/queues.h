@@ -75,6 +75,7 @@ struct OutboundEvent {
     OutboundEventType type = OutboundEventType::TcpBroadcast;
     std::vector<uint8_t> payload;
     uint32_t acks[config::kMaxPlayers] = {};
+    uint32_t tick = 0; // UdpSnapshot/UdpEvent transport header
 };
 
 class InboundQueue {

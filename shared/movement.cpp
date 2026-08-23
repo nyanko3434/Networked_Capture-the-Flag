@@ -39,8 +39,8 @@ PlayerMotion movement_step(const PlayerMotion& in, const InputCmd& cmd,
         vy += speed;
     }
 
-    // Diagonal normalization (README §7.2): 181/256 ~ 1/sqrt(2), keeping
-    // everything in integer math.
+    // Diagonal normalization (README §7.2): the kDiagonalFactorNum/
+    // Den ratio, keeping everything in integer math.
     if (vx != 0 && vy != 0) {
         vx = fp_mul(vx, config::kDiagonalFactorNum);
         vy = fp_mul(vy, config::kDiagonalFactorNum);

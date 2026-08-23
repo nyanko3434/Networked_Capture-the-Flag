@@ -51,12 +51,13 @@ Sim::Sim(InboundQueue& inbound, OutboundQueue& outbound)
     flags_[1].position = kBlueBasePosition;
 }
 
-void Sim::run() {
+void Sim::run(uint32_t max_ticks) {
     running_ = true;
     const int64_t tick_ns = 1'000'000'000L / tick_hz_;
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
-    while (running_) {
+    uint32_t executed = 0;
+    while (running_ && (max_ticks == 0 || executed < max_ticks)) {
         next.tv_nsec += tick_ns;
         while (next.tv_nsec >= 1'000'000'000L) {
             next.tv_nsec -= 1'000'000'000L;
@@ -72,7 +73,9 @@ void Sim::run() {
             next = now; // resync, never catch-up (README §3.2)
         }
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, nullptr);
+        if (debug_pre_tick) debug_pre_tick();
         tick();
+        ++executed;
     }
 }
 
@@ -545,6 +548,7 @@ void Sim::publish() {
         for (int id = 0; id < config::kMaxPlayers; ++id) {
             ev.acks[id] = player_acks_[id];
         }
+        ev.tick = current_tick_;
         outbound_.push(ev);
     }
 

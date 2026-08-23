@@ -315,16 +315,22 @@ void NetServer::on_join_lobby(int fd, const protocol::MsgJoinLobby& msg) {
     if (existing != nullptr) return; // already joined
 
     ClientEntry* entry = registry_.add(fd, msg.name);
-    if (entry == nullptr || lobby_.add_player(entry->player_id) !=
-                               JoinResult::Ok) {
-        // Full or in-progress: reject and roll the registry back so the
+    const JoinResult lobby_result =
+        entry != nullptr ? lobby_.add_player(entry->player_id)
+                         : JoinResult::Full;
+    if (lobby_result != JoinResult::Ok) {
+        // Reject with the real reason and roll the registry back so the
         // connection slot is not leaked.
         if (entry != nullptr) {
-            lobby_.remove_player(entry->player_id);
+            registry_.remove(entry->player_id);
         }
-        send_frame_generic(fd, protocol::MessageType::JoinReject,
-                           protocol::MsgJoinReject{ctf::protocol::JoinRejectReason::Full},
-                           protocol::encode_join_reject);
+        send_frame_generic(
+            fd, protocol::MessageType::JoinReject,
+            protocol::MsgJoinReject{
+                lobby_result == JoinResult::InProgress
+                    ? ctf::protocol::JoinRejectReason::InProgress
+                    : ctf::protocol::JoinRejectReason::Full},
+            protocol::encode_join_reject);
         return;
     }
     entry->session_token = make_token();
@@ -523,13 +529,15 @@ void NetServer::handle_wake() {
         switch (ev.type) {
             case OutboundEventType::UdpSnapshot:
                 send_udp_snapshots(registry_, udp_fd_, ev.payload,
-                                   ev.acks);
+                                   ev.acks, ev.tick);
+                ++udp_snapshots_sent_;
                 break;
             case OutboundEventType::TcpBroadcast:
                 // Frame it once ([u16 len][u8 type][payload], README §5.3):
                 // sim events arrive as [u8 type][encoded fields].
                 if (!ev.payload.empty()) {
                     broadcast_tcp_event(registry_, frame_payload(ev.payload));
+                    ++tcp_events_fanned_out_;
                 }
                 break;
             case OutboundEventType::UdpEvent:

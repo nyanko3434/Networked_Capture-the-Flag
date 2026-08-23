@@ -41,6 +41,8 @@ public:
 
     // --- test/main accessors ---
     ClientRegistry& registry() { return registry_; }
+    uint64_t udp_snapshots_sent() const { return udp_snapshots_sent_; }
+    uint64_t tcp_events_fanned_out() const { return tcp_events_fanned_out_; }
     uint16_t local_port() const { return local_port_; }
     uint16_t udp_port() const { return udp_port_; }
     int wake_fd() const { return event_fd_; } // sim writes 8 bytes here
@@ -98,6 +100,8 @@ private:
     std::map<int, std::vector<uint8_t>> pre_join_; // fd -> bytes, pre-join
 
     uint32_t last_silence_check_ms_ = 0;
+    uint64_t udp_snapshots_sent_ = 0;
+    uint64_t tcp_events_fanned_out_ = 0;
 };
 
 } // namespace ctf

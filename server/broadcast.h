@@ -21,10 +21,12 @@ namespace ctf {
 int broadcast_tcp_event(ClientRegistry& registry,
                         const std::vector<uint8_t>& payload);
 
-// Patches last_input_seq (payload offset 0) per recipient and issues one
-// sendto per client with a registered UDP address (README §5.5).
+// Wraps the serialized WORLD_SNAPSHOT body in the 8-byte UDP header
+// (README §5.3), patches last_input_seq (payload offset 0) per recipient,
+// and issues one sendto per client with a registered UDP address
+// (README §5.5).
 void send_udp_snapshots(ClientRegistry& registry, int udp_fd,
                         const std::vector<uint8_t>& body,
-                        const uint32_t* acks);
+                        const uint32_t* acks, uint32_t tick);
 
 } // namespace ctf

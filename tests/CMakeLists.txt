@@ -14,6 +14,7 @@ set(CTF_TEST_SOURCES
     test_sim.cpp
     test_broadcast.cpp
     test_net_server.cpp
+    test_sim_loop.cpp
 )
 
 # Server modules under test, added explicitly as their tests land.

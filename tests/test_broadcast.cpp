@@ -90,7 +90,7 @@ TEST_CASE("udp snapshots differ only in the patched 4-byte field") {
     int udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
     REQUIRE(udp_fd >= 0);
 
-    send_udp_snapshots(reg, udp_fd, body, acks);
+    send_udp_snapshots(reg, udp_fd, body, acks, /*tick=*/7777);
 
     auto recv_one = [&]() -> std::vector<uint8_t> {
         std::vector<uint8_t> buf(2048);
@@ -103,27 +103,35 @@ TEST_CASE("udp snapshots differ only in the patched 4-byte field") {
     std::vector<uint8_t> dgram_a = recv_one();
     std::vector<uint8_t> dgram_b = recv_one();
 
-    REQUIRE(dgram_a.size() == body.size());
-    REQUIRE(dgram_b.size() == body.size());
+    const size_t hdr = config::kUdpHeaderBytes;
+    REQUIRE(dgram_a.size() == hdr + body.size());
+    REQUIRE(dgram_b.size() == hdr + body.size());
 
-    // Exactly the first 4 bytes differ between the two recipients.
+    // Transport header: magic, version, type=WorldSnapshot, tick.
+    CHECK(dgram_a[0] == 0x43);
+    CHECK(dgram_a[1] == 0x46);
+    CHECK(dgram_a[3] == static_cast<uint8_t>(MessageType::WorldSnapshot));
+    ByteReader hr(dgram_a.data() + 4, 4);
+    CHECK(hr.u32() == 7777);
+
+    // Exactly the first 4 payload bytes differ between recipients.
     size_t diff_bytes = 0;
-    for (size_t i = 0; i < body.size(); ++i) {
+    for (size_t i = 0; i < dgram_a.size(); ++i) {
         if (dgram_a[i] != dgram_b[i]) ++diff_bytes;
     }
     CHECK(diff_bytes <= 4);
 
-    // And the patched values are the per-recipient acks.
+    // Patched values are the per-recipient acks.
     auto read_seq = [&](const std::vector<uint8_t>& d) {
-        ByteReader r(d.data(), d.size());
+        ByteReader r(d.data() + hdr, d.size() - hdr);
         return r.u32();
     };
     CHECK(read_seq(dgram_a) == 111);
     CHECK(read_seq(dgram_b) == 222222);
 
     // Everything after the patch matches the shared body.
-    CHECK(std::memcmp(dgram_a.data() + 4, body.data() + 4, body.size() - 4) ==
-          0);
+    CHECK(std::memcmp(dgram_a.data() + hdr + 4, body.data() + 4,
+                      body.size() - 4) == 0);
 
     close(udp_fd);
 }

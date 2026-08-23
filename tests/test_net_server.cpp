@@ -385,6 +385,49 @@ TEST_CASE("udp: hello registers address; inputs flow; garbage is dropped") {
     close(udp_fd);
 }
 
+TEST_CASE("mid-match JOIN_LOBBY is rejected with reason InProgress") {
+    ServerHarness h(60000); // no silence interference
+    TestClient host;
+    host.connect_to(h.server->local_port());
+    MsgJoinLobby j1{};
+    std::strcpy(j1.name, "host");
+    REQUIRE(host.send_frame(MessageType::JoinLobby, j1, encode_join_lobby));
+    FrameView a1;
+    REQUIRE(wait_for_frame(host, MessageType::JoinAccept, a1, 1000));
+
+    TestClient guest;
+    guest.connect_to(h.server->local_port());
+    MsgJoinLobby j2{};
+    std::strcpy(j2.name, "guest");
+    REQUIRE(guest.send_frame(MessageType::JoinLobby, j2, encode_join_lobby));
+    FrameView a2;
+    REQUIRE(wait_for_frame(guest, MessageType::JoinAccept, a2, 1000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(kPollTimeoutMs * 3));
+
+    // Start the match.
+    MsgStartRequest req{};
+    REQUIRE(host.send_frame(MessageType::StartRequest, req,
+                            encode_start_request));
+    FrameView start;
+    REQUIRE(wait_for_frame(host, MessageType::GameStart, start, 1000));
+
+    // Third client tries to join MID-MATCH: rejected with InProgress.
+    TestClient late;
+    late.connect_to(h.server->local_port());
+    MsgJoinLobby j3{};
+    std::strcpy(j3.name, "late");
+    REQUIRE(late.send_frame(MessageType::JoinLobby, j3, encode_join_lobby));
+
+    FrameView reject;
+    REQUIRE(wait_for_frame(late, MessageType::JoinReject, reject, 1000));
+    REQUIRE(reject.payload.size() >= 1);
+    ByteReader r(reject.payload.data(), reject.payload.size());
+    MsgJoinReject rr;
+    REQUIRE(decode_join_reject(r, rr));
+    CHECK(rr.reason == JoinRejectReason::InProgress);
+    CHECK(h.server->registry().entries().size() == 2); // not leaked
+}
+
 TEST_CASE("tcp close removes the client within one poll cycle") {
     ServerHarness h;
     TestClient c;
@@ -499,4 +542,36 @@ TEST_CASE("eventfd wake beats the poll timeout") {
 
     slow.stop();
     runner.join();
+}
+
+TEST_CASE("outbound counters track snapshots and fanned-out events") {
+    ServerHarness h;
+    TestClient c;
+    c.connect_to(h.server->local_port());
+    MsgJoinLobby join{};
+    std::strcpy(join.name, "counter");
+    REQUIRE(c.send_frame(MessageType::JoinLobby, join, encode_join_lobby));
+    FrameView accept;
+    REQUIRE(wait_for_frame(c, MessageType::JoinAccept, accept, 1000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(kPollTimeoutMs * 2));
+
+    const uint64_t tcp_before = h.server->tcp_events_fanned_out();
+
+    for (int i = 0; i < 5; ++i) {
+        OutboundEvent ev;
+        ev.type = OutboundEventType::UdpSnapshot;
+        ev.payload.assign(64, 0x11);
+        h.outbound.push(ev);
+    }
+    h.wake();
+    std::this_thread::sleep_for(std::chrono::milliseconds(kPollTimeoutMs * 3));
+    CHECK(h.server->udp_snapshots_sent() == 5);
+
+    OutboundEvent ev;
+    ev.type = OutboundEventType::TcpBroadcast;
+    ev.payload.assign(8, 0x22);
+    h.outbound.push(ev);
+    h.wake();
+    std::this_thread::sleep_for(std::chrono::milliseconds(kPollTimeoutMs * 3));
+    CHECK(h.server->tcp_events_fanned_out() == tcp_before + 1);
 }
