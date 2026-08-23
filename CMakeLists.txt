@@ -12,9 +12,32 @@ endif()
 
 add_compile_options(-Wall -Wextra -Wpedantic)
 
+# --- sanitizer presets (README §10: several acceptance criteria require
+# ASan/TSan verification). Usage:
+#   cmake -DCTF_SANITIZE_ADDRESS=ON ..   # AddressSanitizer + UBSan
+#   cmake -DCTF_SANITIZE_THREAD=ON ..    # ThreadSanitizer (queues stress)
+option(CTF_SANITIZE_ADDRESS "Build with ASan + UBSan" OFF)
+option(CTF_SANITIZE_THREAD "Build with TSan" OFF)
+if(CTF_SANITIZE_ADDRESS AND CTF_SANITIZE_THREAD)
+    message(FATAL_ERROR "ASan and TSan cannot be enabled together")
+endif()
+if(CTF_SANITIZE_ADDRESS)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+if(CTF_SANITIZE_THREAD)
+    add_compile_options(-fsanitize=thread -g)
+    add_link_options(-fsanitize=thread)
+endif()
+
 find_package(Threads REQUIRED)
 
-# --- raylib (client only), fetched at v5.0 rather than found on the system. ---
+# --- raylib (client only), fetched at v5.0 rather than found on the system.
+# Server-only builds can skip it entirely: -DCTF_BUILD_CLIENT=OFF (raylib's
+# GLFW backend requires X11/RandR dev headers at configure time). ---
+option(CTF_BUILD_CLIENT "Build ctf_client, ctf_bot and fetch raylib" ON)
+
+if(CTF_BUILD_CLIENT)
 include(FetchContent)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
@@ -29,6 +52,7 @@ FetchContent_Declare(
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 FetchContent_MakeAvailable(raylib)
 unset(CMAKE_POLICY_VERSION_MINIMUM)
+endif()
 
 # --- shared: compiled into server, client, and bot (README §4). ---
 add_library(shared STATIC
@@ -57,6 +81,7 @@ target_link_libraries(ctf_server PRIVATE shared Threads::Threads)
 
 # --- client_core: the code shared between the real client and the headless
 # bot (net_client, prediction, interpolation). Must stay raylib-free. ---
+if(CTF_BUILD_CLIENT)
 add_library(client_core STATIC
     client/net_client.cpp
     client/prediction.cpp
@@ -77,6 +102,7 @@ add_executable(ctf_bot
     bot/main.cpp
 )
 target_link_libraries(ctf_bot PRIVATE client_core shared Threads::Threads)
+endif()
 
 enable_testing()
 add_subdirectory(tests)
