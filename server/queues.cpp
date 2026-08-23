@@ -1,8 +1,8 @@
 #include "queues.h"
 
-// Scaffolding only — real queue bodies (push/pop under the mutex, per
-// README §3.2 lock discipline) are written together when the sim thread is
-// split out in week 2 (README §11).
+// The ONLY place mutexes appear (README §3.2 lock discipline): push/pop
+// copy data in/out under the queue's own mutex and release before anything
+// else happens — no syscall, no second lock, ever held here.
 
 namespace ctf {
 
@@ -14,10 +14,34 @@ MutexGuard::~MutexGuard() {
     pthread_mutex_unlock(&mutex_);
 }
 
-void InboundQueue::push(const InboundCommand&) {}
-bool InboundQueue::pop(InboundCommand&) { return false; }
+void InboundQueue::push(const InboundCommand& cmd) {
+    MutexGuard guard(mutex_);
+    items_.push_back(cmd);
+}
 
-void OutboundQueue::push(const OutboundEvent&) {}
-bool OutboundQueue::pop(OutboundEvent&) { return false; }
+bool InboundQueue::pop(InboundCommand& out) {
+    MutexGuard guard(mutex_);
+    if (items_.empty()) {
+        return false;
+    }
+    out = items_.front();
+    items_.erase(items_.begin());
+    return true;
+}
+
+void OutboundQueue::push(const OutboundEvent& event) {
+    MutexGuard guard(mutex_);
+    items_.push_back(event);
+}
+
+bool OutboundQueue::pop(OutboundEvent& out) {
+    MutexGuard guard(mutex_);
+    if (items_.empty()) {
+        return false;
+    }
+    out = items_.front();
+    items_.erase(items_.begin());
+    return true;
+}
 
 } // namespace ctf

@@ -7,10 +7,19 @@ set(CTF_TEST_SOURCES
     test_movement.cpp
     test_protocol.cpp
     test_net_util.cpp
+    test_queues.cpp
 )
 
-add_executable(ctf_tests ${CTF_TEST_SOURCES})
-target_include_directories(ctf_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# Server modules under test, added explicitly as their tests land.
+set(CTF_TEST_SERVER_SOURCES
+    ../server/queues.cpp
+)
+
+add_executable(ctf_tests ${CTF_TEST_SOURCES} ${CTF_TEST_SERVER_SOURCES})
+target_include_directories(ctf_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/server
+)
 target_link_libraries(ctf_tests PRIVATE shared Threads::Threads)
 
 add_test(NAME ctf_tests COMMAND ctf_tests)
