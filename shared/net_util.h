@@ -25,7 +25,9 @@ ssize_t send_all(int fd, const void* buf, size_t len);
 // while buffered >= 3, peek len; if buffered >= len + 3, one message is
 // available. On success, returns the number of bytes the frame occupies
 // (including the 3-byte header) so the caller can memmove the remainder;
-// returns 0 if no complete frame is buffered yet.
+// returns 0 if no complete frame is buffered yet; returns SIZE_MAX if the
+// declared length exceeds config::kTcpFrameCapBytes — a disconnect signal,
+// never a buffer accumulation.
 size_t recv_framed(const uint8_t* buf, size_t len, uint8_t& out_type,
                     const uint8_t*& out_payload, uint16_t& out_payload_len);
 
