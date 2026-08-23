@@ -2,6 +2,7 @@
 
 #include <ctime>
 #include <cmath>
+#include <unistd.h>
 #include <algorithm>
 #include <vector>
 
@@ -52,10 +53,11 @@ Sim::Sim(InboundQueue& inbound, OutboundQueue& outbound)
 
 void Sim::run() {
     running_ = true;
+    const int64_t tick_ns = 1'000'000'000L / tick_hz_;
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
     while (running_) {
-        next.tv_nsec += config::kTickDurationNs;
+        next.tv_nsec += tick_ns;
         while (next.tv_nsec >= 1'000'000'000L) {
             next.tv_nsec -= 1'000'000'000L;
             next.tv_sec += 1;
@@ -66,8 +68,8 @@ void Sim::run() {
         const int64_t behind_ns =
             (next.tv_sec - now.tv_sec) * 1'000'000'000L +
             (next.tv_nsec - now.tv_nsec);
-        if (-behind_ns > 3 * config::kTickDurationNs) {
-            next = now;
+        if (-behind_ns > 3 * tick_ns) {
+            next = now; // resync, never catch-up (README §3.2)
         }
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, nullptr);
         tick();
@@ -530,17 +532,28 @@ void Sim::publish() {
     snapshot_ = snap;
 
     // Serialize the body ONCE; broadcast patches last_input_seq (offset 0)
-    // per recipient (README §5.5).
-    OutboundEvent ev;
-    ev.type = OutboundEventType::UdpSnapshot;
-    ev.payload.resize(512);
-    ByteWriter w(ev.payload.data(), ev.payload.size());
-    protocol::encode_world_snapshot(w, snap);
-    ev.payload.resize(w.size());
-    for (int id = 0; id < config::kMaxPlayers; ++id) {
-        ev.acks[id] = player_acks_[id];
+    // per recipient (README §5.5). --snapshot-rate decimates the UDP sends
+    // without touching simulation fidelity.
+    const int div = tick_hz_ / snapshot_hz_;
+    if (div <= 1 || current_tick_ % static_cast<uint32_t>(div) == 0) {
+        OutboundEvent ev;
+        ev.type = OutboundEventType::UdpSnapshot;
+        ev.payload.resize(512);
+        ByteWriter w(ev.payload.data(), ev.payload.size());
+        protocol::encode_world_snapshot(w, snap);
+        ev.payload.resize(w.size());
+        for (int id = 0; id < config::kMaxPlayers; ++id) {
+            ev.acks[id] = player_acks_[id];
+        }
+        outbound_.push(ev);
     }
-    outbound_.push(ev);
+
+    // Wake the network thread immediately after publishing (README §3.2).
+    if (wake_fd_ >= 0) {
+        const uint64_t one = 1;
+        ssize_t n = write(wake_fd_, &one, sizeof(one));
+        (void)n;
+    }
 }
 
 // ---------------------------------------------------------------------------

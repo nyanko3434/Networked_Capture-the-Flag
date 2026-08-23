@@ -1,15 +1,30 @@
-// ctf_server entry point. Scaffolding only: parses the flags described in
-// README §9, prints what it parsed, and exits. Networking, the sim thread,
-// and the tick loop are wired up in later weeks (README §11).
+// ctf_server entry point (README §9): parses --port --tick
+// --snapshot-rate --poller, wires the two threads + eventfd, and shuts down
+// cleanly on SIGINT.
 
+#include <poll.h>
+#include <signal.h>
+
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <string>
+#include <thread>
 
 #include "game_config.h"
+#include "net_server.h"
+#include "poller.h"
+#include "queues.h"
+#include "sim.h"
 
 namespace {
+
+std::atomic<bool> g_stop{false};
+
+void on_sigint(int) { g_stop = true; }
 
 struct ServerArgs {
     uint16_t port = 7777;
@@ -21,7 +36,7 @@ struct ServerArgs {
 ServerArgs parse_args(int argc, char** argv) {
     ServerArgs args;
     for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+        const std::string arg = argv[i];
         if (arg == "--port" && i + 1 < argc) {
             args.port = static_cast<uint16_t>(std::atoi(argv[++i]));
         } else if (arg == "--tick" && i + 1 < argc) {
@@ -30,6 +45,11 @@ ServerArgs parse_args(int argc, char** argv) {
             args.snapshot_rate = std::atoi(argv[++i]);
         } else if (arg == "--poller" && i + 1 < argc) {
             args.poller = argv[++i];
+        } else if (arg == "--help" || arg == "-h") {
+            std::printf(
+                "usage: ctf_server [--port N] [--tick HZ] "
+                "[--snapshot-rate HZ] [--poller poll|epoll]\n");
+            std::exit(0);
         }
     }
     return args;
@@ -39,9 +59,49 @@ ServerArgs parse_args(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     ServerArgs args = parse_args(argc, argv);
+
+    signal(SIGINT, on_sigint);
+    signal(SIGPIPE, SIG_IGN); // send() to a dead peer must not kill us
+
+    // Exactly two threads (README §3.2): network + simulation.
+    auto inbound = std::make_unique<ctf::InboundQueue>();
+    auto outbound = std::make_unique<ctf::OutboundQueue>();
+
+    std::unique_ptr<ctf::IPoller> poller =
+        args.poller == "epoll" ? ctf::make_epoll_poller()
+                               : ctf::make_poll_poller();
+
+    ctf::NetServer net(args.port, *inbound, *outbound, std::move(poller));
+    if (!net.start()) {
+        std::fprintf(stderr, "ctf_server: failed to bind port %u\n",
+                     static_cast<unsigned>(args.port));
+        return 1;
+    }
+
+    ctf::Sim sim(*inbound, *outbound);
+    sim.set_wake_fd(net.wake_fd()); // exists before either thread runs
+    sim.set_tick_rate(args.tick_rate);
+    sim.set_snapshot_rate(args.snapshot_rate);
+
     std::printf(
-        "ctf_server: port=%u tick=%d snapshot-rate=%d poller=%s\n",
-        static_cast<unsigned>(args.port), args.tick_rate, args.snapshot_rate,
-        args.poller.c_str());
+        "ctf_server: listening tcp=%u udp=%u tick=%d snapshot=%d poller=%s\n",
+        static_cast<unsigned>(net.local_port()),
+        static_cast<unsigned>(net.udp_port()), args.tick_rate,
+        args.snapshot_rate, args.poller.c_str());
+    std::fflush(stdout);
+
+    std::thread net_thread([&] { net.run(); });
+    std::thread sim_thread([&] { sim.run(); });
+
+    while (!g_stop) {
+        ::poll(nullptr, 0, 100); // idle until SIGINT
+    }
+
+    net.stop();
+    sim.stop();
+    net_thread.join();
+    sim_thread.join();
+
+    std::printf("ctf_server: clean shutdown\n");
     return 0;
 }

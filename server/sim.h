@@ -35,6 +35,17 @@ public:
     uint32_t current_tick() const { return current_tick_; }
     bool match_over() const { return match_over_; }
 
+    // Wiring (main.cpp): the eventfd the network thread polls; after each
+    // publish we write 8 bytes so it wakes immediately (README §3.2).
+    void set_wake_fd(int fd) { wake_fd_ = fd; }
+
+    // Tick rate override (--tick) and snapshot decimation
+    // (--snapshot-rate below the tick rate, README §9 demo use).
+    void set_tick_rate(int hz) { tick_hz_ = hz > 0 ? hz : config::kTickRateHz; }
+    void set_snapshot_rate(int hz) {
+        snapshot_hz_ = hz > 0 ? hz : config::kTickRateHz;
+    }
+
     // Flag state as seen by tests (mirrors what snapshots publish).
     FlagState flag_state(Team team) const;
     uint8_t flag_carrier(Team team) const;
@@ -104,6 +115,9 @@ private:
     InputCmd applied_cmds_[config::kMaxPlayers]; // input applied this tick
     uint32_t player_acks_[config::kMaxPlayers] = {};
     Vec2Fixed last_ray_hit_;
+    int wake_fd_ = -1;
+    int tick_hz_ = config::kTickRateHz;
+    int snapshot_hz_ = config::kTickRateHz;
     uint32_t current_tick_ = 0;
     bool match_over_ = false;
     bool running_ = false;
