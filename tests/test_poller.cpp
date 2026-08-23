@@ -6,6 +6,8 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <memory>
+#include <utility>
 #include <vector>
 
 #include "net_util.h"
@@ -13,6 +15,15 @@
 
 using ctf::IPoller;
 using ctf::PollResult;
+
+// Every poller test runs against BOTH backends (README §2.9: swappable,
+// both measured). Subcases give each backend its own pass/fail line.
+auto make_pollers() {
+    return std::vector<std::pair<const char*, std::unique_ptr<IPoller>(*)()>>{
+        {"poll", ctf::make_poll_poller},
+        {"epoll", ctf::make_epoll_poller},
+    };
+}
 
 namespace {
 
@@ -42,10 +53,12 @@ TEST_CASE("empty poller wait respects the timeout without spinning") {
 }
 
 TEST_CASE("peer write makes the registered fd read-ready") {
+    for (auto& backend_pair : make_pollers()) {
+        SUBCASE(backend_pair.first) {
+        auto poller = backend_pair.second();
     int fds[2];
     REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
 
-    auto poller = ctf::make_poll_poller();
     poller->add(fds[0], false);
 
     // No data yet -> empty within a short timeout.
@@ -62,14 +75,18 @@ TEST_CASE("peer write makes the registered fd read-ready") {
 
     close(fds[0]);
     close(fds[1]);
-}
 
+        }
+    }
+}
 TEST_CASE("POLLOUT interest toggles on and off") {
+    for (auto& backend_pair : make_pollers()) {
+        SUBCASE(backend_pair.first) {
+        auto poller = backend_pair.second();
     int fds[2];
     REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
     REQUIRE(ctf::set_nonblocking(fds[0]));
 
-    auto poller = ctf::make_poll_poller();
 
     // Fill the send side so it is currently NOT writable.
     fill_until_full(fds[0]);
@@ -113,13 +130,17 @@ TEST_CASE("POLLOUT interest toggles on and off") {
 
     close(fds[0]);
     close(fds[1]);
-}
 
+        }
+    }
+}
 TEST_CASE("removed fd no longer reported even with pending data") {
+    for (auto& backend_pair : make_pollers()) {
+        SUBCASE(backend_pair.first) {
+        auto poller = backend_pair.second();
     int fds[2];
     REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
 
-    auto poller = ctf::make_poll_poller();
     poller->add(fds[0], false);
     poller->remove(fds[0]);
 
@@ -130,14 +151,18 @@ TEST_CASE("removed fd no longer reported even with pending data") {
 
     close(fds[0]);
     close(fds[1]);
-}
 
+        }
+    }
+}
 TEST_CASE("multiple ready fds are all reported in one pass") {
+    for (auto& backend_pair : make_pollers()) {
+        SUBCASE(backend_pair.first) {
+        auto poller = backend_pair.second();
     int a[2], b[2];
     REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, a) == 0);
     REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, b) == 0);
 
-    auto poller = ctf::make_poll_poller();
     poller->add(a[0], false);
     poller->add(b[0], false);
 
@@ -150,4 +175,7 @@ TEST_CASE("multiple ready fds are all reported in one pass") {
 
     close(a[0]); close(a[1]);
     close(b[0]); close(b[1]);
+
+        }
+    }
 }

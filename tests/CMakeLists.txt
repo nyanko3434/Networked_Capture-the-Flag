@@ -25,6 +25,7 @@ set(CTF_TEST_SERVER_SOURCES
     ../server/sim.cpp
     ../server/broadcast.cpp
     ../server/net_server.cpp
+    ../server/poller_epoll.cpp
 )
 
 add_executable(ctf_tests ${CTF_TEST_SOURCES} ${CTF_TEST_SERVER_SOURCES})
