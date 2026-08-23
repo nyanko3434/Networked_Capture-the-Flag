@@ -12,6 +12,8 @@
 //   drain inbound -> apply commands -> pop one input per player -> movement
 //   -> combat -> flags -> win check -> publish snapshot and events
 
+#include <functional>
+
 #include "game_types.h"
 #include "map.h"
 #include "queues.h"
@@ -22,9 +24,15 @@ class Sim {
 public:
     Sim(InboundQueue& inbound, OutboundQueue& outbound);
 
-    // Runs the 30 Hz clock_nanosleep(TIMER_ABSTIME) loop until stop().
-    void run();
+    // Runs the clock_nanosleep(TIMER_ABSTIME) loop (README §3.2) until
+    // stop() or, if max_ticks > 0, until that many ticks have executed
+    // (test hook: lets pacing/resync be measured deterministically).
+    void run(uint32_t max_ticks = 0);
     void stop();
+
+    // Test hook: invoked just before every tick (e.g. to inject a stall
+    // for the resync test or record timestamps for the stability test).
+    std::function<void()> debug_pre_tick;
 
     // One fixed-tick step of the whole simulation. Public for tests.
     void tick();
@@ -108,7 +116,7 @@ private:
 
     // Flags indexed by [0]=Red, [1]=Blue.
     FlagInfo flags_[2] = {};
-    uint32_t drop_tick_[2] = {}; // for 450-tick auto-return
+    uint32_t drop_tick_[2] = {}; // for kFlagAutoReturnTicks auto-return
 
     uint8_t score_[2] = {};
     WorldSnapshot snapshot_;
