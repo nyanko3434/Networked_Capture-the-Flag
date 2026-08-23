@@ -3,8 +3,7 @@
 // Hardcoded 40x25 tile grid, mirrored left-right (README §7.1): every row is
 // a palindrome, so tile(x,y) == tile(39-x,y) holds by construction. Two tile
 // types only; bases and spawn points are coordinate constants below, never
-// tile types. All collision math is integer fixed-point — no sqrt, no floats
-// (README §7.2).
+// tile types. All collision math is integer fixed-point only.
 
 namespace ctf {
 
