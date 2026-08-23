@@ -2,6 +2,7 @@
 # Each module adds its test file here deliberately.
 set(CTF_TEST_SOURCES
     test_main.cpp
+    test_bytebuffer.cpp
 )
 
 add_executable(ctf_tests ${CTF_TEST_SOURCES})
