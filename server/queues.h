@@ -41,21 +41,40 @@ enum class InboundCommandType : uint8_t {
 
 // Commands flowing network thread -> sim thread (README §3.2: join/leave
 // are commands, not direct mutations).
+//
+// - PlayerJoined: player_id, team, spawn_index (from the lobby's GAME_START
+//   team assignment, applied by the network thread).
+// - PlayerLeft: player_id.
+// - PlayerInput: player_id + one decoded input with its wire seq. The
+//   network thread pushes one command per redundant input entry; the sim's
+//   per-player ring buffer ignores seqs it has already queued.
 struct InboundCommand {
     InboundCommandType type = InboundCommandType::PlayerJoined;
     uint8_t player_id = 0;
+    Team team = Team::Red;
+    uint8_t spawn_index = 0;
+    uint32_t seq = 0;
     InputCmd input;
 };
 
 enum class OutboundEventType : uint8_t {
     TcpBroadcast,
     UdpSnapshot,
+    UdpEvent, // cosmetic SHOT_FIRED tracers (loss-tolerant)
 };
 
 // Snapshots/events flowing sim thread -> network thread.
+//
+// UdpSnapshot carries the serialized WORLD_SNAPSHOT body (payload) plus the
+// per-player last_input_seq table so broadcast can patch 4 bytes per
+// recipient (README §5.5).
+//
+// TcpBroadcast/UdpEvent payloads are [u8 type][encoded fields]; the network
+// side prepends the u16 TCP length when framing.
 struct OutboundEvent {
     OutboundEventType type = OutboundEventType::TcpBroadcast;
     std::vector<uint8_t> payload;
+    uint32_t acks[config::kMaxPlayers] = {};
 };
 
 class InboundQueue {
