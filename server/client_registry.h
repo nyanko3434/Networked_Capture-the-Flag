@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "game_config.h"
-
 namespace ctf {
 
 struct ClientEntry {
@@ -28,16 +27,21 @@ struct ClientEntry {
 
 class ClientRegistry {
 public:
+    ClientRegistry();
+
     ClientEntry* add(int tcp_fd, const std::string& name);
     void remove(uint8_t player_id);
 
     ClientEntry* find_by_id(uint8_t player_id);
     ClientEntry* find_by_fd(int tcp_fd);
 
-    const std::vector<ClientEntry>& entries() const { return entries_; }
+    // Live entries, by value: storage slots are never moved or erased
+    // (tombstoned in place), so previously returned pointers stay valid.
+    std::vector<ClientEntry> entries() const;
 
 private:
-    std::vector<ClientEntry> entries_;
+    // Indexed by player_id; a free slot has tcp_fd == -1.
+    std::vector<ClientEntry> storage_;
 };
 
 } // namespace ctf
