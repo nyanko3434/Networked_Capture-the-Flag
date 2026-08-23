@@ -23,6 +23,11 @@ struct ClientEntry {
 
     uint32_t session_token = 0;
     uint32_t last_input_tick = 0; // for the 3s UDP silence timeout (README §5.7)
+
+    // Pending TCP output (network-thread-owned): appended by broadcast,
+    // flushed by net_server while POLLOUT is registered. Capped at
+    // config::kTcpPendingBufferCapBytes — beyond that the client goes.
+    std::vector<uint8_t> pending_out;
 };
 
 class ClientRegistry {

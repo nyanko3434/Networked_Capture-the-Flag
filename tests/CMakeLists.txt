@@ -12,6 +12,8 @@ set(CTF_TEST_SOURCES
     test_poller.cpp
     test_lobby.cpp
     test_sim.cpp
+    test_broadcast.cpp
+    test_net_server.cpp
 )
 
 # Server modules under test, added explicitly as their tests land.
@@ -21,6 +23,8 @@ set(CTF_TEST_SERVER_SOURCES
     ../server/poller_poll.cpp
     ../server/lobby.cpp
     ../server/sim.cpp
+    ../server/broadcast.cpp
+    ../server/net_server.cpp
 )
 
 add_executable(ctf_tests ${CTF_TEST_SOURCES} ${CTF_TEST_SERVER_SOURCES})
