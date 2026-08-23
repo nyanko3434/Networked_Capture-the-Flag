@@ -95,9 +95,14 @@ stay frozen (Nayan builds against them).
 
 ## Progress log
 
-- [ ] Phase 0 — test harness
-- [ ] Phase 1.1 bytebuffer · [ ] 1.2 map · [ ] 1.3 movement · [ ] 1.4 protocol/net_util
+- [x] Phase 0 — test harness
+- [x] Phase 1.1 bytebuffer · [x] 1.2 map · [x] 1.3 movement · [x] 1.4 protocol/net_util
 - [ ] Phase 2 queues · registry · poller_poll
 - [ ] Phase 3 lobby · sim
 - [ ] Phase 4 broadcast · net_server
 - [ ] Phase 5 main.cpp · poller_epoll
+
+Build commands used:
+- Normal: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCTF_BUILD_CLIENT=OFF`
+- ASan:   same + `-DCTF_SANITIZE_ADDRESS=ON` (mirror build kept under /tmp/opencode)
+- Run:    `cmake --build build --target ctf_tests && ./build/tests/ctf_tests`
