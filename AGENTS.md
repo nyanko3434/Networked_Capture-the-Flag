@@ -100,9 +100,15 @@ stay frozen (Nayan builds against them).
 - [x] Phase 2 queues · registry · poller_poll
 - [x] Phase 3 lobby · sim
 - [x] Phase 4 broadcast · net_server
-- [ ] Phase 5 main.cpp · poller_epoll
+- [x] Phase 5 main.cpp · poller_epoll
 
 Build commands used:
 - Normal: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCTF_BUILD_CLIENT=OFF`
 - ASan:   same + `-DCTF_SANITIZE_ADDRESS=ON` (mirror build kept under /tmp/opencode)
-- Run:    `cmake --build build --target ctf_tests && ./build/tests/ctf_tests`
+- TSan:   same + `-DCTF_SANITIZE_THREAD=ON` (/tmp/opencode/ctf-tsan)
+- Tests:  `cmake --build build --target ctf_tests && ./build/tests/ctf_tests`
+- Server: `./build/ctf_server --port 7777 --tick 30 [--poller poll|epoll]`
+
+Status: ALL PHASES COMPLETE. 86 test cases / ~11.8k assertions green,
+ASan clean, TSan clean on queue stress, live loopback smoke test OK for
+both poller backends.
