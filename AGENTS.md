@@ -98,7 +98,7 @@ stay frozen (Nayan builds against them).
 - [x] Phase 0 — test harness
 - [x] Phase 1.1 bytebuffer · [x] 1.2 map · [x] 1.3 movement · [x] 1.4 protocol/net_util
 - [x] Phase 2 queues · registry · poller_poll
-- [ ] Phase 3 lobby · sim
+- [x] Phase 3 lobby · sim
 - [ ] Phase 4 broadcast · net_server
 - [ ] Phase 5 main.cpp · poller_epoll
 
