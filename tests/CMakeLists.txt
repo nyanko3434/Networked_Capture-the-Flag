@@ -4,6 +4,7 @@ set(CTF_TEST_SOURCES
     test_main.cpp
     test_bytebuffer.cpp
     test_map.cpp
+    test_movement.cpp
 )
 
 add_executable(ctf_tests ${CTF_TEST_SOURCES})
