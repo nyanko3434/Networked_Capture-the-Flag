@@ -63,6 +63,28 @@ void unpack_player_flags(uint8_t f, PlayerState& p) {
     p.firing = (f & kFlagFiring) != 0;
 }
 
+// Team/FlagState/JoinRejectReason are wire bytes cast to a fixed-underlying-
+// type enum: an out-of-range byte doesn't crash, it just produces a Team
+// that's neither Red nor Blue and silently corrupts state wherever the
+// caller does `team == Team::Blue`. Validate against the real enumerators
+// here so a malformed packet is dropped instead, matching this file's own
+// "never trust a malformed packet" contract.
+bool decode_team(uint8_t raw, Team& out) {
+    if (raw > static_cast<uint8_t>(Team::Blue)) {
+        return false;
+    }
+    out = static_cast<Team>(raw);
+    return true;
+}
+
+bool decode_flag_state(uint8_t raw, FlagState& out) {
+    if (raw > static_cast<uint8_t>(FlagState::Dropped)) {
+        return false;
+    }
+    out = static_cast<FlagState>(raw);
+    return true;
+}
+
 } // namespace
 
 void encode_udp_header(ByteWriter& w, const UdpHeader& hdr) {
@@ -113,8 +135,15 @@ void encode_join_reject(ByteWriter& w, const MsgJoinReject& msg) {
 }
 
 bool decode_join_reject(ByteReader& r, MsgJoinReject& out) {
-    out.reason = static_cast<JoinRejectReason>(r.u8());
-    return r.ok();
+    const uint8_t raw = r.u8();
+    if (!r.ok()) {
+        return false;
+    }
+    if (raw > static_cast<uint8_t>(JoinRejectReason::BadVersion)) {
+        return false;
+    }
+    out.reason = static_cast<JoinRejectReason>(raw);
+    return true;
 }
 
 void encode_lobby_state(ByteWriter& w, const MsgLobbyState& msg) {
@@ -161,7 +190,10 @@ bool decode_game_start(ByteReader& r, MsgGameStart& out) {
     }
     for (int i = 0; i < out.player_count; ++i) {
         out.ids[i] = r.u8();
-        out.teams[i] = static_cast<Team>(r.u8());
+        const uint8_t team_raw = r.u8();
+        if (!decode_team(team_raw, out.teams[i])) {
+            return false;
+        }
         out.spawn_points[i] = read_vec2(r);
     }
     return r.ok();
@@ -239,12 +271,16 @@ bool decode_world_snapshot(ByteReader& r, WorldSnapshot& out) {
     out.player_count = r.u8();
     out.flag_carrier_red = r.u8();
     out.flag_carrier_blue = r.u8();
-    out.flag_state_red = static_cast<FlagState>(r.u8());
-    out.flag_state_blue = static_cast<FlagState>(r.u8());
+    const uint8_t flag_state_red_raw = r.u8();
+    const uint8_t flag_state_blue_raw = r.u8();
     out.score_red = r.u8();
     out.score_blue = r.u8();
     out.seconds_remaining = r.u16();
     if (!r.ok() || out.player_count > config::kMaxPlayers) {
+        return false;
+    }
+    if (!decode_flag_state(flag_state_red_raw, out.flag_state_red) ||
+        !decode_flag_state(flag_state_blue_raw, out.flag_state_blue)) {
         return false;
     }
 
@@ -308,10 +344,13 @@ void encode_flag_picked_up(ByteWriter& w, const MsgFlagPickedUp& msg) {
 }
 
 bool decode_flag_picked_up(ByteReader& r, MsgFlagPickedUp& out) {
-    out.flag_team = static_cast<Team>(r.u8());
+    const uint8_t team_raw = r.u8();
     out.player_id = r.u8();
     out.tick = r.u32();
-    return r.ok();
+    if (!r.ok()) {
+        return false;
+    }
+    return decode_team(team_raw, out.flag_team);
 }
 
 void encode_flag_dropped(ByteWriter& w, const MsgFlagDropped& msg) {
@@ -321,10 +360,13 @@ void encode_flag_dropped(ByteWriter& w, const MsgFlagDropped& msg) {
 }
 
 bool decode_flag_dropped(ByteReader& r, MsgFlagDropped& out) {
-    out.flag_team = static_cast<Team>(r.u8());
+    const uint8_t team_raw = r.u8();
     out.position = read_vec2(r);
     out.tick = r.u32();
-    return r.ok();
+    if (!r.ok()) {
+        return false;
+    }
+    return decode_team(team_raw, out.flag_team);
 }
 
 void encode_flag_returned(ByteWriter& w, const MsgFlagReturned& msg) {
@@ -334,10 +376,13 @@ void encode_flag_returned(ByteWriter& w, const MsgFlagReturned& msg) {
 }
 
 bool decode_flag_returned(ByteReader& r, MsgFlagReturned& out) {
-    out.flag_team = static_cast<Team>(r.u8());
+    const uint8_t team_raw = r.u8();
     out.player_id = r.u8();
     out.tick = r.u32();
-    return r.ok();
+    if (!r.ok()) {
+        return false;
+    }
+    return decode_team(team_raw, out.flag_team);
 }
 
 void encode_flag_captured(ByteWriter& w, const MsgFlagCaptured& msg) {
@@ -347,10 +392,13 @@ void encode_flag_captured(ByteWriter& w, const MsgFlagCaptured& msg) {
 }
 
 bool decode_flag_captured(ByteReader& r, MsgFlagCaptured& out) {
-    out.flag_team = static_cast<Team>(r.u8());
+    const uint8_t team_raw = r.u8();
     out.player_id = r.u8();
     out.tick = r.u32();
-    return r.ok();
+    if (!r.ok()) {
+        return false;
+    }
+    return decode_team(team_raw, out.flag_team);
 }
 
 void encode_match_end(ByteWriter& w, const MsgMatchEnd& msg) {
@@ -360,10 +408,13 @@ void encode_match_end(ByteWriter& w, const MsgMatchEnd& msg) {
 }
 
 bool decode_match_end(ByteReader& r, MsgMatchEnd& out) {
-    out.winning_team = static_cast<Team>(r.u8());
+    const uint8_t team_raw = r.u8();
     out.score_red = r.u8();
     out.score_blue = r.u8();
-    return r.ok();
+    if (!r.ok()) {
+        return false;
+    }
+    return decode_team(team_raw, out.winning_team);
 }
 
 void encode_heartbeat(ByteWriter&, const MsgHeartbeat&) {}
