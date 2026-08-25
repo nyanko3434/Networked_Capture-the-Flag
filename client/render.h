@@ -6,6 +6,7 @@
 // <raylib.h>.
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "game_types.h"
@@ -94,6 +95,14 @@ private:
     };
     std::vector<Tracer> tracers_;
     static constexpr double kTracerLifetimeSec = 0.1; // 100ms fade
+
+    // On-screen message feed for game events (kills, flag drops, captures).
+    struct GameMessage {
+        std::string text;
+        double spawn_time;
+    };
+    std::vector<GameMessage> messages_;
+    static constexpr double kMessageLifetimeSec = 4.0;
 };
 
 } // namespace ctf
