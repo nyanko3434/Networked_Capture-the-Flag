@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "game_types.h"
+#include "map.h"
 
 namespace ctf {
 
@@ -23,8 +24,13 @@ class Prediction {
 public:
     Prediction();
 
-    // Runs one local tick: samples input, appends to history, and advances
-    // local_state_ through movement_step (README §6.2).
+    // Runs one local tick given an already-sampled input (input sampling
+    // itself is a platform concern - raylib for the real client, synthetic
+    // for the bot - and lives one layer up): assigns the next seq, appends
+    // to history, and advances local_state_ through movement_step (README
+    // §6.2). Sending the resulting PLAYER_INPUT packet is the caller's job
+    // (see current_seq()/history() below) so this class has no socket
+    // dependency.
     void on_local_tick(const InputCmd& cmd);
 
     // Reconciles against an authoritative snapshot (README §6.3): drops
@@ -34,12 +40,21 @@ public:
     const PlayerMotion& local_state() const { return local_state_; }
     uint32_t mispredictions() const { return mispredictions_; }
 
+    // For the caller to build the PLAYER_INPUT packet (README §5.4/§6.2):
+    // the current seq and the input history in ascending-seq order, from
+    // which it takes the last config::kInputRedundancy entries. Kept as a
+    // caller responsibility (rather than Prediction owning a NetClient)
+    // so this class stays networking-free and independently testable.
+    uint32_t current_seq() const { return seq_; }
+    const std::vector<InputHistoryEntry>& history() const { return history_; }
+
 private:
     uint32_t seq_ = 0;
     uint32_t last_applied_tick_ = 0;
     PlayerMotion local_state_;
     std::vector<InputHistoryEntry> history_;
     uint32_t mispredictions_ = 0;
+    Map map_; // stateless tile grid (README §7.1) - movement_step needs one
 };
 
 } // namespace ctf
