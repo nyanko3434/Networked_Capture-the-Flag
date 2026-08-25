@@ -52,7 +52,8 @@ struct TestClient {
                         sizeof(addr)) == 0);
     }
 
-    bool send_frame(MessageType type, const auto& msg, auto encode) {
+    template <typename Msg, typename Encode>
+    bool send_frame(MessageType type, const Msg& msg, Encode encode) {
         std::vector<uint8_t> payload(160);
         ByteWriter w(payload.data(), payload.size());
         encode(w, msg);

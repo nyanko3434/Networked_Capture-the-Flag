@@ -25,7 +25,8 @@
 
 namespace ctf {
 
-namespace protocol = ::ctf::protocol;
+// namespace protocol = ::ctf::protocol;  // redundant inside namespace ctf;
+// clang 22 rejects an alias colliding with the existing ctf::protocol
 
 class NetServer {
 public:
