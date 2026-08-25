@@ -109,7 +109,10 @@ void draw_flag(Vec2Fixed pos, Team team) {
 
 } // namespace
 
-Renderer::Renderer() = default;
+Renderer::Renderer() {
+    tracers_.reserve(32);
+    messages_.reserve(16);
+}
 Renderer::~Renderer() { shutdown(); }
 
 bool Renderer::init(int width, int height, const char* title) {
