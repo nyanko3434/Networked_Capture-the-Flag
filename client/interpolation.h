@@ -6,9 +6,9 @@
 // config::kInterpolationDelayTicks.
 
 #include <cstdint>
-#include <vector>
 
 #include "game_types.h"
+#include "ring_buffer.h"
 
 namespace ctf {
 
@@ -48,7 +48,7 @@ public:
     size_t snapshot_count() const { return ring_.size(); }
 
 private:
-    std::vector<WorldSnapshot> ring_;
+    RingBuffer<WorldSnapshot, config::kSnapshotRingSize> ring_;
     double render_tick_ = 0.0;
     bool bootstrapped_ = false;
 };

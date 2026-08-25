@@ -109,7 +109,10 @@ void draw_flag(Vec2Fixed pos, Team team) {
 
 } // namespace
 
-Renderer::Renderer() = default;
+Renderer::Renderer() {
+    tracers_.reserve(32);
+    messages_.reserve(16);
+}
 Renderer::~Renderer() { shutdown(); }
 
 bool Renderer::init(int width, int height, const char* title) {
@@ -184,7 +187,7 @@ void Renderer::draw_frame(const WorldSnapshot& latest, uint8_t my_player_id,
     if (IsKeyPressed(KEY_F2)) interpolation_enabled_ = !interpolation_enabled_;
     if (IsKeyPressed(KEY_F3)) show_server_ghost_ = !show_server_ghost_;
 
-    static const Map map; // stateless tile grid (README §7.1)
+    static const Map& map = Map::instance(); // stateless tile grid (README §7.1)
 
     BeginDrawing();
     ClearBackground(Color{20, 20, 24, 255});

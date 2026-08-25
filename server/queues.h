@@ -13,9 +13,10 @@
 // MutexGuard is the ~8-line RAII wrapper so an early return cannot leak a
 // lock, while still satisfying the raw-pthreads requirement.
 
+#include <array>
 #include <cstdint>
+#include <deque>
 #include <pthread.h>
-#include <vector>
 
 #include "game_types.h"
 
@@ -71,11 +72,21 @@ enum class OutboundEventType : uint8_t {
 //
 // TcpBroadcast/UdpEvent payloads are [u8 type][encoded fields]; the network
 // side prepends the u16 TCP length when framing.
+//
+// Payload uses a fixed-size array to avoid heap allocation per event.
+// Snapshots are ~128 bytes, events are ~20 bytes; 512 is ample.
 struct OutboundEvent {
     OutboundEventType type = OutboundEventType::TcpBroadcast;
-    std::vector<uint8_t> payload;
+    std::array<uint8_t, 512> payload_data{};
+    uint16_t payload_size = 0;
     uint32_t acks[config::kMaxPlayers] = {};
     uint32_t tick = 0; // UdpSnapshot/UdpEvent transport header
+
+    // Convenience accessors for compatibility.
+    const uint8_t* payload_ptr() const { return payload_data.data(); }
+    uint8_t* payload_ptr() { return payload_data.data(); }
+    size_t payload_len() const { return payload_size; }
+    bool payload_empty() const { return payload_size == 0; }
 };
 
 class InboundQueue {
@@ -85,7 +96,7 @@ public:
 
 private:
     pthread_mutex_t mutex_ = PTHREAD_MUTEX_INITIALIZER;
-    std::vector<InboundCommand> items_;
+    std::deque<InboundCommand> items_;
 };
 
 class OutboundQueue {
@@ -95,7 +106,7 @@ public:
 
 private:
     pthread_mutex_t mutex_ = PTHREAD_MUTEX_INITIALIZER;
-    std::vector<OutboundEvent> items_;
+    std::deque<OutboundEvent> items_;
 };
 
 } // namespace ctf

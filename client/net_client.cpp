@@ -29,7 +29,11 @@ uint32_t now_ms() {
 
 } // namespace
 
-NetClient::NetClient() = default;
+NetClient::NetClient() {
+    tcp_rx_buf_.reserve(4096);
+    pending_snapshots_.reserve(8);
+    pending_events_.reserve(16);
+}
 
 NetClient::~NetClient() { disconnect(); }
 

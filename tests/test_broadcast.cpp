@@ -90,7 +90,7 @@ TEST_CASE("udp snapshots differ only in the patched 4-byte field") {
     int udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
     REQUIRE(udp_fd >= 0);
 
-    send_udp_snapshots(reg, udp_fd, body, acks, /*tick=*/7777);
+    send_udp_snapshots(reg, udp_fd, body.data(), body.size(), acks, /*tick=*/7777);
 
     auto recv_one = [&]() -> std::vector<uint8_t> {
         std::vector<uint8_t> buf(2048);

@@ -51,6 +51,11 @@ Vec2Fixed tile_to_fp(int32_t tile_x, int32_t tile_y) {
 
 Map::Map() = default;
 
+const Map& Map::instance() {
+    static const Map map;
+    return map;
+}
+
 TileType Map::tile_at(int32_t tile_x, int32_t tile_y) const {
     if (tile_x < 0 || tile_x >= config::kMapWidthTiles ||
         tile_y < 0 || tile_y >= config::kMapHeightTiles) {

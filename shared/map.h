@@ -21,6 +21,10 @@ class Map {
 public:
     Map();
 
+    // Singleton for the stateless tile grid — one instance shared across
+    // Prediction, Renderer, and BotAI instead of constructing separately.
+    static const Map& instance();
+
     TileType tile_at(int32_t tile_x, int32_t tile_y) const;
     bool is_wall(int32_t tile_x, int32_t tile_y) const;
 

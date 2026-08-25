@@ -42,22 +42,30 @@ TEST_CASE("outbound queue round-trips payloads") {
     OutboundQueue q;
     OutboundEvent ev;
     ev.type = ctf::OutboundEventType::UdpSnapshot;
-    ev.payload = {1, 2, 3, 4, 5};
+    ev.payload_data[0] = 1; ev.payload_data[1] = 2;
+    ev.payload_data[2] = 3; ev.payload_data[3] = 4;
+    ev.payload_data[4] = 5;
+    ev.payload_size = 5;
     q.push(ev);
 
     // A second event keeps ordering.
     OutboundEvent ev2;
     ev2.type = ctf::OutboundEventType::TcpBroadcast;
-    ev2.payload = {9};
+    ev2.payload_data[0] = 9;
+    ev2.payload_size = 1;
     q.push(ev2);
 
     OutboundEvent out;
     REQUIRE(q.pop(out));
     CHECK(out.type == ctf::OutboundEventType::UdpSnapshot);
-    CHECK((out.payload == std::vector<uint8_t>{1, 2, 3, 4, 5}));
+    CHECK(out.payload_len() == 5);
+    CHECK(out.payload_data[0] == 1);
+    CHECK(out.payload_data[4] == 5);
 
     REQUIRE(q.pop(out));
     CHECK(out.type == ctf::OutboundEventType::TcpBroadcast);
+    CHECK(out.payload_len() == 1);
+    CHECK(out.payload_data[0] == 9);
 
     CHECK_FALSE(q.pop(out));
 }

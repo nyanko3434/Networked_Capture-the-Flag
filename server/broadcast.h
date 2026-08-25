@@ -26,7 +26,7 @@ int broadcast_tcp_event(ClientRegistry& registry,
 // and issues one sendto per client with a registered UDP address
 // (README §5.5).
 void send_udp_snapshots(ClientRegistry& registry, int udp_fd,
-                        const std::vector<uint8_t>& body,
+                        const uint8_t* body, size_t body_len,
                         const uint32_t* acks, uint32_t tick);
 
 } // namespace ctf

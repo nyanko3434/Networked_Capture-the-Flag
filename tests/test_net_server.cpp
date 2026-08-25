@@ -18,6 +18,21 @@ using namespace ctf::protocol;
 
 namespace {
 
+int count_live(const ClientRegistry& reg) {
+    int n = 0;
+    for (const auto& e : reg.storage()) {
+        if (e.tcp_fd >= 0) ++n;
+    }
+    return n;
+}
+
+bool is_empty(const ClientRegistry& reg) {
+    for (const auto& e : reg.storage()) {
+        if (e.tcp_fd >= 0) return false;
+    }
+    return true;
+}
+
 constexpr int kPollTimeoutMs = 50;   // short so cycles are observable
 constexpr int kSilenceMs = 250;      // injected UDP-silence threshold
 
@@ -171,7 +186,7 @@ TEST_CASE("handshake: JOIN_LOBBY gets JOIN_ACCEPT and a roster entry") {
     // Roster updated; LOBBY_STATE broadcast follows.
     FrameView lobby_state;
     CHECK(wait_for_frame(c, MessageType::LobbyState, lobby_state, 1000));
-    CHECK(h.server->registry().entries().size() == 1);
+    CHECK(count_live(h.server->registry()) == 1);
 
     // No sim commands until a match starts.
     CHECK(h.drain_inbound().empty());
@@ -425,7 +440,7 @@ TEST_CASE("mid-match JOIN_LOBBY is rejected with reason InProgress") {
     MsgJoinReject rr;
     REQUIRE(decode_join_reject(r, rr));
     CHECK(rr.reason == JoinRejectReason::InProgress);
-    CHECK(h.server->registry().entries().size() == 2); // not leaked
+    CHECK(count_live(h.server->registry()) == 2); // not leaked
 }
 
 TEST_CASE("tcp close removes the client within one poll cycle") {
@@ -439,13 +454,13 @@ TEST_CASE("tcp close removes the client within one poll cycle") {
     FrameView accept;
     REQUIRE(wait_for_frame(c, MessageType::JoinAccept, accept, 1000));
     std::this_thread::sleep_for(std::chrono::milliseconds(kPollTimeoutMs * 2));
-    REQUIRE(h.server->registry().entries().size() == 1);
+    REQUIRE(count_live(h.server->registry()) == 1);
 
     close(c.fd);
     c.fd = -1;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(kPollTimeoutMs * 4));
-    CHECK(h.server->registry().entries().empty());
+    CHECK(is_empty(h.server->registry()));
 
     // Lobby-phase departure never reaches the sim (no match started).
     CHECK(h.drain_inbound().empty());
@@ -465,7 +480,7 @@ TEST_CASE("udp silence disconnects a quiet client") {
     std::this_thread::sleep_for(
         std::chrono::milliseconds(kSilenceMs + kPollTimeoutMs * 6));
 
-    CHECK(h.server->registry().entries().empty());
+    CHECK(is_empty(h.server->registry()));
 }
 
 TEST_CASE("pending output beyond 64KB disconnects a slow client") {
@@ -485,7 +500,8 @@ TEST_CASE("pending output beyond 64KB disconnects a slow client") {
     // regardless of kernel buffers.
     OutboundEvent ev;
     ev.type = OutboundEventType::TcpBroadcast;
-    ev.payload.assign(1024, 0xAB);
+    std::fill(ev.payload_data.begin(), ev.payload_data.end(), 0xAB);
+    ev.payload_size = 1024;
     for (int i = 0; i < static_cast<int>(
                         config::kTcpPendingBufferCapBytes / 1024) +
                     4;
@@ -496,7 +512,7 @@ TEST_CASE("pending output beyond 64KB disconnects a slow client") {
 
     std::this_thread::sleep_for(
         std::chrono::milliseconds(kPollTimeoutMs * 6));
-    CHECK(h.server->registry().entries().empty());
+    CHECK(is_empty(h.server->registry()));
 }
 
 TEST_CASE("eventfd wake beats the poll timeout") {
@@ -526,12 +542,11 @@ TEST_CASE("eventfd wake beats the poll timeout") {
     OutboundEvent ev;
     ev.type = OutboundEventType::TcpBroadcast;
     MsgPlayerKilled kill{1, 2, 5};
-    ev.payload.push_back(static_cast<uint8_t>(MessageType::PlayerKilled));
-    ev.payload.resize(ev.payload.size() + 16);
+    ev.payload_data[0] = static_cast<uint8_t>(MessageType::PlayerKilled);
     {
-        ByteWriter w(ev.payload.data() + 1, 16);
+        ByteWriter w(ev.payload_data.data() + 1, 16);
         encode_player_killed(w, kill);
-        ev.payload.resize(1 + w.size());
+        ev.payload_size = static_cast<uint16_t>(1 + w.size());
     }
     out2.push(ev);
     const uint64_t one = 1;
@@ -560,7 +575,8 @@ TEST_CASE("outbound counters track snapshots and fanned-out events") {
     for (int i = 0; i < 5; ++i) {
         OutboundEvent ev;
         ev.type = OutboundEventType::UdpSnapshot;
-        ev.payload.assign(64, 0x11);
+        std::fill(ev.payload_data.begin(), ev.payload_data.end(), 0x11);
+        ev.payload_size = 64;
         h.outbound.push(ev);
     }
     h.wake();
@@ -569,7 +585,8 @@ TEST_CASE("outbound counters track snapshots and fanned-out events") {
 
     OutboundEvent ev;
     ev.type = OutboundEventType::TcpBroadcast;
-    ev.payload.assign(8, 0x22);
+    std::fill(ev.payload_data.begin(), ev.payload_data.end(), 0x22);
+    ev.payload_size = 8;
     h.outbound.push(ev);
     h.wake();
     std::this_thread::sleep_for(std::chrono::milliseconds(kPollTimeoutMs * 3));

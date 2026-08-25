@@ -73,9 +73,9 @@ struct Fixture {
     bool pop_event(const std::vector<OutboundEvent>& events, MessageType type,
                    DecodeFn decode, Msg& out) {
         for (const auto& ev : events) {
-            if (ev.payload.empty()) continue;
-            if (static_cast<MessageType>(ev.payload[0]) != type) continue;
-            ByteReader r(ev.payload.data() + 1, ev.payload.size() - 1);
+            if (ev.payload_empty()) continue;
+            if (static_cast<MessageType>(ev.payload_data[0]) != type) continue;
+            ByteReader r(ev.payload_ptr() + 1, ev.payload_len() - 1);
             if (decode(r, out)) return true;
         }
         return false;
@@ -596,10 +596,10 @@ TEST_CASE("three captures fire MATCH_END and freeze gameplay") {
     bool saw_end = false;
     const auto& events = all;
     for (const auto& ev : events) {
-        if (!ev.payload.empty() &&
-            static_cast<MessageType>(ev.payload[0]) ==
+        if (!ev.payload_empty() &&
+            static_cast<MessageType>(ev.payload_data[0]) ==
                 protocol::MessageType::MatchEnd) {
-            ByteReader r(ev.payload.data() + 1, ev.payload.size() - 1);
+            ByteReader r(ev.payload_ptr() + 1, ev.payload_len() - 1);
             CHECK(decode_match_end(r, end));
             saw_end = true;
         }

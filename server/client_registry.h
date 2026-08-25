@@ -40,9 +40,18 @@ public:
     ClientEntry* find_by_id(uint8_t player_id);
     ClientEntry* find_by_fd(int tcp_fd);
 
-    // Live entries, by value: storage slots are never moved or erased
-    // (tombstoned in place), so previously returned pointers stay valid.
-    std::vector<ClientEntry> entries() const;
+    // Live entries by reference — callers iterate without copying.
+    // Storage is stable (tombstoned in place), so the reference is safe.
+    const std::vector<ClientEntry>& storage() const { return storage_; }
+
+    // Convenience: iterate live entries without copying. Calls fn(entry)
+    // for each entry with tcp_fd != -1.
+    template <typename Fn>
+    void for_each_live(Fn fn) const {
+        for (const auto& e : storage_) {
+            if (e.tcp_fd >= 0) fn(e);
+        }
+    }
 
 private:
     // Indexed by player_id; a free slot has tcp_fd == -1.

@@ -25,7 +25,7 @@ bool InboundQueue::pop(InboundCommand& out) {
         return false;
     }
     out = items_.front();
-    items_.erase(items_.begin());
+    items_.pop_front();
     return true;
 }
 
@@ -40,7 +40,7 @@ bool OutboundQueue::pop(OutboundEvent& out) {
         return false;
     }
     out = items_.front();
-    items_.erase(items_.begin());
+    items_.pop_front();
     return true;
 }
 
