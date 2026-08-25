@@ -547,21 +547,29 @@ void NetServer::handle_wake() {
                 break;
             case OutboundEventType::UdpEvent:
                 // Cosmetic tracers go to every registered UDP address.
+                // ev.payload is [u8 type][encoded fields] from ser_event();
+                // the type byte goes into the UDP header (dgram[3]), and
+                // only the encoded fields go into the body (skip byte 0).
                 for (const auto& entry : registry_.entries()) {
                     if (entry.has_udp_addr) {
                         ClientEntry* e =
                             registry_.find_by_id(entry.player_id);
                         if (e == nullptr) continue;
+                        const size_t body_len =
+                            ev.payload.size() > 1 ? ev.payload.size() - 1 : 0;
                         std::vector<uint8_t> dgram(
-                            config::kUdpHeaderBytes + ev.payload.size());
+                            config::kUdpHeaderBytes + body_len);
                         dgram[0] = protocol::kMagic >> 8;
                         dgram[1] = protocol::kMagic & 0xFF;
                         dgram[2] = protocol::kProtocolVersion;
                         dgram[3] =
                             ev.payload.empty() ? 0 : ev.payload[0];
-                        std::copy(ev.payload.begin(), ev.payload.end(),
-                                  dgram.begin() +
-                                      config::kUdpHeaderBytes);
+                        if (body_len > 0) {
+                            std::copy(ev.payload.begin() + 1,
+                                      ev.payload.end(),
+                                      dgram.begin() +
+                                          config::kUdpHeaderBytes);
+                        }
                         sendto(udp_fd_, dgram.data(), dgram.size(), 0,
                                reinterpret_cast<const sockaddr*>(
                                    &e->udp_addr),

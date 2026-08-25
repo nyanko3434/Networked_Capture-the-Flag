@@ -320,8 +320,12 @@ void Sim::combat() {
         }
         if ((applied_cmds_[id].buttons & kInputFire) == 0) continue;
 
+        // Cast from player center, not top-left corner — the client
+        // calculates aim angle from the center, so the origin must match.
+        const int32_t half = (config::kPlayerSizePx * config::kFixedScale) / 2;
+        const Vec2Fixed center{p.position.x + half, p.position.y + half};
         size_t enemy = config::kMaxPlayers;
-        const bool hit = cast_ray(p.position, applied_cmds_[id].aim_angle,
+        const bool hit = cast_ray(center, applied_cmds_[id].aim_angle,
                                   p.team, &enemy);
 
         // SHOT_FIRED is cosmetic and loss-tolerant -> UDP (README §5.4).
