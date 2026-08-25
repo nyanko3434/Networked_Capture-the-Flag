@@ -172,3 +172,8 @@ sudo ./tools/netem.sh off
 | Client fails at startup about X11/display | install X11 dev packages (§1) or use `-DCTF_BUILD_CLIENT=OFF`; on Wayland it runs through XWayland by default |
 | Client connects but sees no players | client must send UDP_HELLO until first snapshot; check firewall allows UDP on the server's ephemeral port |
 | `JOIN_REJECT reason=InProgress` | match already running; wait for MATCH_END then host restarts |
+| Shots feel offset/quantized | fixed on branch `fix/shot-origin-and-ray-direction` (tracer origin = box center; full 16-bit aim direction) — merge the PR if not yet in your branch |
+
+Git note: `gh` CLI is not installed on this machine, so PRs are opened via
+the compare URL GitHub prints after `git push`. Install with
+`sudo pacman -S github-cli` if you want `gh pr create` to work.

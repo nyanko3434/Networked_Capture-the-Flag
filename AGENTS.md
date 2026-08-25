@@ -127,3 +127,23 @@ Acceptance-closure sweep (post-Phase-5):
       CPU 0.35s vs 0.32s over 8s)
 - Fixed en route: send_udp_snapshots now emits the 8-byte UDP header
   (README 5.3) with per-tick field; OutboundEvent carries tick.
+
+Session notes (2026-08-25, client-integration debugging):
+- Compiler strictness: system default is now clang 22, which rejects two
+  constructs GCC tolerated. Fixed (committed on dev in a5ca21a):
+  server/net_server.h self-referential `namespace protocol` alias removed;
+  tests/test_net_server.cpp send_frame C++20 auto params converted to an
+  explicit template. Any compiler works now.
+- raylib FetchContent times out on this network (~75 KB/s to GitHub).
+  Permanent local clone at ~/Documents/Projects/temp/raylib-test; fresh
+  configures need -DFETCHCONTENT_SOURCE_DIR_RAYLIB=<that path> (cached in
+  build/CMakeCache.txt afterwards). Full run instructions live in
+  manual.md — keep it current when build/run steps change.
+- Combat fixes (branch fix/shot-origin-and-ray-direction, PR into dev):
+  SHOT_FIRED origin was the box top-left corner, not the center the aim
+  angle and ray are computed from; cast_ray quantized directions through a
+  256-entry trig table ((aim_angle >> 8)) — replaced with full 16-bit-angle
+  direction + integer remainder-accumulator march. Server-only combat math,
+  no desync-path impact.
+- Test counts grew since the status line above: currently 120 cases /
+  12,229 assertions green.
