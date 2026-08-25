@@ -131,6 +131,23 @@ void Renderer::on_event(const GameEvent& ev) {
     // next FLAG_DROPPED, so nothing needs to happen for those here.
 }
 
+void Renderer::draw_waiting_screen(const char* line1, const char* line2) {
+    if (!initialized_) return;
+    BeginDrawing();
+    ClearBackground(Color{20, 20, 24, 255});
+    const int w = GetScreenWidth();
+    const int h = GetScreenHeight();
+    if (line1 != nullptr) {
+        const int tw = MeasureText(line1, 24);
+        DrawText(line1, (w - tw) / 2, h / 2 - 20, 24, RAYWHITE);
+    }
+    if (line2 != nullptr) {
+        const int tw2 = MeasureText(line2, 18);
+        DrawText(line2, (w - tw2) / 2, h / 2 + 14, 18, LIGHTGRAY);
+    }
+    EndDrawing();
+}
+
 void Renderer::draw_frame(const WorldSnapshot& latest, uint8_t my_player_id,
                           const Prediction& prediction,
                           const Interpolation& interpolation,

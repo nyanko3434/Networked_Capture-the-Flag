@@ -59,6 +59,12 @@ public:
                     const Prediction& prediction,
                     const Interpolation& interpolation, const HudMetrics& hud);
 
+    // Minimal lobby/handshake-wait screen (README §5.6 steps 3-5 take a
+    // little wall-clock time - UDP_HELLO resends, LOBBY_STATE broadcasts).
+    // Kept here rather than in main.cpp so this stays the only file that
+    // issues raylib drawing calls.
+    void draw_waiting_screen(const char* line1, const char* line2);
+
     // Debug toggle state (README §6.6). The toggles themselves are polled
     // from raylib key state (F1/F2/F3) inside draw_frame() - this is the
     // one file allowed to touch raylib (README §4) - these accessors exist
