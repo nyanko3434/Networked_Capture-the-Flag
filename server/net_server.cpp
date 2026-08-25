@@ -217,18 +217,22 @@ void NetServer::handle_tcp_readable(int fd) {
     for (;;) {
         const ssize_t n = recv(fd, chunk, sizeof(chunk), 0);
         if (n == 0) {
-            disconnect(*entry, true);
+            if (entry != nullptr) disconnect(*entry, true);
+            else close_unregistered(fd);
             return;
         }
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-            disconnect(*entry, true); // hard error: definitive (README §5.7)
+            // hard error: definitive (README §5.7)
+            if (entry != nullptr) disconnect(*entry, true);
+            else close_unregistered(fd);
             return;
         }
         accum.insert(accum.end(), chunk, chunk + n);
 
         if (accum.size() > kAccumCap) {
-            disconnect(*entry, true); // framing cap exceeded
+            if (entry != nullptr) disconnect(*entry, true); // framing cap exceeded
+            else close_unregistered(fd);
             return;
         }
         if (n < static_cast<ssize_t>(sizeof(chunk))) break;
@@ -278,6 +282,7 @@ void NetServer::handle_tcp_readable(int fd) {
     if (dead) {
         ClientEntry* e = registry_.find_by_fd(fd);
         if (e != nullptr) disconnect(*e, true);
+        else close_unregistered(fd); // oversize frame from a pre-join fd
         return;
     }
     if (pos > 0) {
@@ -608,6 +613,16 @@ void NetServer::disconnect(ClientEntry& entry, bool notify_sim) {
         inbound_.push(cmd);
     }
     broadcast_lobby_state();
+}
+
+void NetServer::close_unregistered(int fd) {
+    // fd has no ClientEntry: either it never completed JOIN_LOBBY, or
+    // on_join_lobby() already rolled the entry back after sending
+    // JOIN_REJECT (README §5.6/§5.7 - a rejected client still closes its
+    // socket like any other disconnect, and that must not crash the server).
+    poller_->remove(fd);
+    close(fd);
+    pre_join_.erase(fd);
 }
 
 } // namespace ctf

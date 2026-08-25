@@ -15,6 +15,10 @@ set(CTF_TEST_SOURCES
     test_broadcast.cpp
     test_net_server.cpp
     test_sim_loop.cpp
+    test_net_client.cpp
+    test_prediction.cpp
+    test_interpolation.cpp
+    test_render_policy.cpp
 )
 
 # Server modules under test, added explicitly as their tests land.
@@ -29,10 +33,21 @@ set(CTF_TEST_SERVER_SOURCES
     ../server/poller_epoll.cpp
 )
 
-add_executable(ctf_tests ${CTF_TEST_SOURCES} ${CTF_TEST_SERVER_SOURCES})
+# Client modules under test, added explicitly as their tests land
+# (implementation_guide.md §3). raylib-free by construction (net_client.cpp
+# never includes render.h), so this stays independent of CTF_BUILD_CLIENT.
+set(CTF_TEST_CLIENT_SOURCES
+    ../client/net_client.cpp
+    ../client/prediction.cpp
+    ../client/interpolation.cpp
+)
+
+add_executable(ctf_tests ${CTF_TEST_SOURCES} ${CTF_TEST_SERVER_SOURCES}
+                        ${CTF_TEST_CLIENT_SOURCES})
 target_include_directories(ctf_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/server
+    ${CMAKE_SOURCE_DIR}/client
 )
 target_link_libraries(ctf_tests PRIVATE shared Threads::Threads)
 

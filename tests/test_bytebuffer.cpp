@@ -135,3 +135,30 @@ TEST_CASE("zero-cap writer rejects any write") {
     w.u8(1);
     CHECK_FALSE(w.ok());
 }
+
+TEST_CASE("a second multi-byte op after the flag is already set stays a no-op") {
+    // Regression test: once overflow_/underflow_ is set, EVERY later call --
+    // not just the one that tripped it -- must refuse without touching
+    // memory. A guard written as `!flag_ && ...` instead of `flag_ || ...`
+    // only catches the *first* offending call; a second u16/u32 call after
+    // that would fall through the (now-false) guard and read/write past the
+    // buffer, silently, since it stays within the same fixed-size array.
+    uint8_t buf[3];
+    ByteWriter w(buf, sizeof(buf));
+    w.u16(0xAABB);
+    CHECK(w.ok());
+    w.u16(0xCCDD); // first overflow: pos_(2)+2 > cap_(3)
+    CHECK_FALSE(w.ok());
+    const size_t size_after_first_overflow = w.size();
+    w.u32(0xDEADBEEFu); // second call while already overflowed
+    CHECK_FALSE(w.ok());
+    CHECK(w.size() == size_after_first_overflow); // must not have advanced
+
+    uint8_t rbuf[3] = {0xAA, 0xBB, 0xCC};
+    ByteReader r(rbuf, sizeof(rbuf));
+    CHECK(r.u16() == 0xAABB);
+    CHECK(r.u16() == 0); // first underflow: pos_(2)+2 > len_(3)
+    CHECK_FALSE(r.ok());
+    CHECK(r.u32() == 0); // second call while already underflowed
+    CHECK_FALSE(r.ok());
+}

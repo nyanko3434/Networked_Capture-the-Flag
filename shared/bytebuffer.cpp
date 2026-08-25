@@ -21,7 +21,11 @@ void ByteWriter::u8(uint8_t v) {
 }
 
 void ByteWriter::u16(uint16_t v) {
-    if (!overflow_ && pos_ + 2 > cap_) {
+    // `overflow_ ||` (not `!overflow_ &&`) so a writer that already failed
+    // stays refused on every later call too -- otherwise, once overflow_
+    // was set by some earlier op, this guard would be skipped entirely and
+    // the write below would run anyway, past `cap_`.
+    if (overflow_ || pos_ + 2 > cap_) {
         overflow_ = true;
         return;
     }
@@ -30,7 +34,7 @@ void ByteWriter::u16(uint16_t v) {
 }
 
 void ByteWriter::u32(uint32_t v) {
-    if (!overflow_ && pos_ + 4 > cap_) {
+    if (overflow_ || pos_ + 4 > cap_) {
         overflow_ = true;
         return;
     }
@@ -53,7 +57,10 @@ uint8_t ByteReader::u8() {
 }
 
 uint16_t ByteReader::u16() {
-    if (!underflow_ && pos_ + 2 > len_) {
+    // Same fix as ByteWriter::u16/u32 above: `underflow_ ||`, not
+    // `!underflow_ &&`, so a reader that already failed keeps refusing
+    // instead of reading past `len_` on the next call.
+    if (underflow_ || pos_ + 2 > len_) {
         underflow_ = true;
         return 0;
     }
@@ -63,7 +70,7 @@ uint16_t ByteReader::u16() {
 }
 
 uint32_t ByteReader::u32() {
-    if (!underflow_ && pos_ + 4 > len_) {
+    if (underflow_ || pos_ + 4 > len_) {
         underflow_ = true;
         return 0;
     }
