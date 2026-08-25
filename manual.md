@@ -51,14 +51,16 @@ connection this times out. Workaround — clone once manually, then point CMake
 at the local copy:
 
 ```bash
-git clone --depth 1 --branch 5.0 https://github.com/raysan5/raylib.git /tmp/opencode/raylib-test
+git clone --depth 1 --branch 5.0 https://github.com/raysan5/raylib.git ~/Documents/Projects/temp/raylib-test
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
-    -DFETCHCONTENT_SOURCE_DIR_RAYLIB=/tmp/opencode/raylib-test
+    -DFETCHCONTENT_SOURCE_DIR_RAYLIB=$HOME/Documents/Projects/temp/raylib-test
 cmake --build build -j$(nproc)
 ```
 
 Once configured, the path is cached in `build/CMakeCache.txt` and plain
-`cmake --build build` keeps working.
+`cmake --build build` keeps working. The local clone currently lives at
+`~/Documents/Projects/temp/raylib-test` — do not delete it, or the next
+fresh configure will re-download from GitHub.
 
 ---
 
@@ -77,9 +79,8 @@ Re-run CMake configure (`cmake -S . -B build ...`) **only** if:
 - you deleted the `build/` directory.
 
 If `build/` was deleted AND your network to GitHub is still slow, repeat the
-workaround from §2. Alternatively keep a permanent local clone somewhere safe
-(e.g. `~/raylib-5.0`) instead of `/tmp/opencode/raylib-test` — `/tmp` may be
-wiped on reboot.
+workaround from §2 using the permanent local clone at
+`~/Documents/Projects/temp/raylib-test`.
 
 ---
 
