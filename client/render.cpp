@@ -134,9 +134,25 @@ void Renderer::on_event(const GameEvent& ev) {
     if (const auto* dropped = std::get_if<protocol::MsgFlagDropped>(&ev)) {
         if (dropped->flag_team == Team::Red) dropped_flag_pos_red_ = dropped->position;
         else dropped_flag_pos_blue_ = dropped->position;
+        messages_.push_back({"Flag dropped!", GetTime()});
     }
     if (const auto* shot = std::get_if<protocol::MsgShotFired>(&ev)) {
         tracers_.push_back({shot->origin, shot->hit_point, GetTime()});
+    }
+    if (const auto* killed = std::get_if<protocol::MsgPlayerKilled>(&ev)) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "Player %u killed by %u",
+                     killed->victim_id, killed->killer_id);
+        messages_.push_back({buf, GetTime()});
+    }
+    if (std::get_if<protocol::MsgFlagCaptured>(&ev)) {
+        messages_.push_back({"FLAG CAPTURED!", GetTime()});
+    }
+    if (std::get_if<protocol::MsgFlagReturned>(&ev)) {
+        messages_.push_back({"Flag returned to base", GetTime()});
+    }
+    if (std::get_if<protocol::MsgFlagPickedUp>(&ev)) {
+        messages_.push_back({"Flag picked up!", GetTime()});
     }
 }
 
@@ -226,6 +242,9 @@ void Renderer::draw_frame(const WorldSnapshot& latest, uint8_t my_player_id,
             if (raw.alive) {
                 draw_aim_indicator(pos, raw.aim_angle);
                 draw_health_bar(pos, raw.health);
+                if (raw.carrying_flag) {
+                    draw_flag(pos, raw.team == Team::Red ? Team::Blue : Team::Red);
+                }
             }
 
             // F3: translucent outline at the authoritative position,
@@ -250,6 +269,10 @@ void Renderer::draw_frame(const WorldSnapshot& latest, uint8_t my_player_id,
             if (shown.alive) {
                 draw_aim_indicator(shown.motion.position, shown.aim_angle);
                 draw_health_bar(shown.motion.position, shown.health);
+                if (shown.carrying_flag) {
+                    draw_flag(shown.motion.position,
+                             shown.team == Team::Red ? Team::Blue : Team::Red);
+                }
             }
         }
     }
@@ -335,6 +358,25 @@ void Renderer::draw_frame(const WorldSnapshot& latest, uint8_t my_player_id,
         interpolation_enabled_ ? "ON" : "OFF",
         show_server_ghost_ ? "ON" : "OFF");
     DrawText(hud_buf, 12, config::kMapHeightPx - 44, 16, RAYWHITE);
+
+    // Game event message feed (kills, flag events).
+    {
+        const double now = GetTime();
+        size_t write = 0;
+        int msg_y = 60;
+        for (size_t i = 0; i < messages_.size(); ++i) {
+            const double age = now - messages_[i].spawn_time;
+            if (age >= kMessageLifetimeSec) continue;
+            const float alpha = age < kMessageLifetimeSec - 0.5f
+                ? 1.0f
+                : static_cast<float>((kMessageLifetimeSec - age) / 0.5f);
+            DrawText(messages_[i].text.c_str(), 12, msg_y, 16,
+                    Fade(YELLOW, alpha));
+            msg_y += 18;
+            messages_[write++] = messages_[i];
+        }
+        messages_.resize(write);
+    }
 
     EndDrawing();
 }

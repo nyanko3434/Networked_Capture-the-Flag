@@ -19,18 +19,22 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <csignal>
+#include <memory>
 #include <random>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "game_config.h"
+#include "map.h"
 #include "net_client.h"
 #include "prediction.h"
+#include "protocol.h"
 
 namespace {
 
@@ -62,42 +66,172 @@ BotArgs parse_args(int argc, char** argv) {
     return args;
 }
 
-// Simple/synthetic wandering input (README §3.6 checklist - "scripted or
-// random movement... not sophisticated AI"). Holds a random button/aim
-// combination for a random duration, then picks a new one. Enough to
-// generate realistic 30Hz input load without pretending to play the game.
-class WanderingInput {
+// Simple but functional bot AI: navigates toward objectives, shoots enemies.
+// Has wall avoidance and imperfect aim so it doesn't feel robotic.
+class BotAI {
 public:
-    explicit WanderingInput(uint32_t seed) : rng_(seed) { pick_new(); }
+    explicit BotAI(uint32_t seed, uint8_t player_id, ctf::Team team)
+        : rng_(seed), my_id_(player_id), my_team_(team),
+          aim_spread_rng_(0.0f, 0.3f),  // ~17 degrees of random spread
+          fire_chance_(0.4),         // 40% chance to fire per tick when enemy visible
+          stuck_timer_(0) {}
 
-    ctf::InputCmd next(double dt_seconds) {
-        remaining_ -= dt_seconds;
-        if (remaining_ <= 0.0) pick_new();
-        return current_;
+    ctf::InputCmd tick(const ctf::WorldSnapshot& snap) {
+        const ctf::PlayerState* self = find_self(snap);
+        if (self == nullptr) return ctf::InputCmd{0, 0};
+
+        const float my_x = static_cast<float>(self->motion.position.x) / ctf::config::kFixedScale;
+        const float my_y = static_cast<float>(self->motion.position.y) / ctf::config::kFixedScale;
+        const ctf::Vec2Fixed my_pos = self->motion.position;
+
+        // Find nearest enemy for shooting.
+        float nearest_dist = 99999.0f;
+        float enemy_dx = 0, enemy_dy = 0;
+        bool have_enemy = false;
+        for (uint8_t i = 0; i < snap.player_count; ++i) {
+            const auto& p = snap.players[i];
+            if (p.id == my_id_ || p.team == my_team_ || !p.alive) continue;
+            const float ex = static_cast<float>(p.motion.position.x) / ctf::config::kFixedScale;
+            const float ey = static_cast<float>(p.motion.position.y) / ctf::config::kFixedScale;
+            const float dx = ex - my_x;
+            const float dy = ey - my_y;
+            const float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist < nearest_dist) {
+                nearest_dist = dist;
+                enemy_dx = dx;
+                enemy_dy = dy;
+                have_enemy = true;
+            }
+        }
+
+        // Determine target.
+        float target_x, target_y;
+        if (self->carrying_flag) {
+            const auto& base = (my_team_ == ctf::Team::Red)
+                ? ctf::kRedBasePosition : ctf::kBlueBasePosition;
+            target_x = static_cast<float>(base.x) / ctf::config::kFixedScale;
+            target_y = static_cast<float>(base.y) / ctf::config::kFixedScale;
+        } else {
+            const auto& flag_pos = (my_team_ == ctf::Team::Red)
+                ? resolve_flag_pos(snap, ctf::Team::Blue)
+                : resolve_flag_pos(snap, ctf::Team::Red);
+            target_x = static_cast<float>(flag_pos.x) / ctf::config::kFixedScale;
+            target_y = static_cast<float>(flag_pos.y) / ctf::config::kFixedScale;
+        }
+
+        // Movement with wall avoidance.
+        const float dx = target_x - my_x;
+        const float dy = target_y - my_y;
+        uint8_t buttons = 0;
+
+        // Try primary direction, then alternatives if blocked.
+        const int32_t step = ctf::config::kMoveSpeedFpPerTick * 2;
+        bool moved = false;
+        if (std::abs(dx) > 4.0f || std::abs(dy) > 4.0f) {
+            // Try direct path first.
+            ctf::Vec2Fixed test_pos = my_pos;
+            if (std::abs(dx) > 4.0f) test_pos.x += (dx > 0 ? step : -step);
+            if (std::abs(dy) > 4.0f) test_pos.y += (dy > 0 ? step : -step);
+            if (!map_.aabb_collides(test_pos)) {
+                if (dx > 4.0f) buttons |= ctf::kInputRight;
+                else if (dx < -4.0f) buttons |= ctf::kInputLeft;
+                if (dy > 4.0f) buttons |= ctf::kInputDown;
+                else if (dy < -4.0f) buttons |= ctf::kInputUp;
+                moved = true;
+                stuck_timer_ = 0;
+            } else {
+                // Blocked — try axis-aligned alternatives.
+                ++stuck_timer_;
+                // Try horizontal only.
+                ctf::Vec2Fixed h_pos = my_pos;
+                h_pos.x += (dx > 0 ? step : -step);
+                // Try vertical only.
+                ctf::Vec2Fixed v_pos = my_pos;
+                v_pos.y += (dy > 0 ? step : -step);
+
+                const bool h_ok = !map_.aabb_collides(h_pos);
+                const bool v_ok = !map_.aabb_collides(v_pos);
+
+                if (h_ok && (!v_ok || stuck_timer_ % 2 == 0)) {
+                    if (dx > 4.0f) buttons |= ctf::kInputRight;
+                    else buttons |= ctf::kInputLeft;
+                    moved = true;
+                } else if (v_ok) {
+                    if (dy > 4.0f) buttons |= ctf::kInputDown;
+                    else buttons |= ctf::kInputUp;
+                    moved = true;
+                }
+
+                // If completely stuck, try random perpendicular movement.
+                if (!moved && stuck_timer_ > 10) {
+                    std::uniform_int_distribution<int> dir(0, 3);
+                    const int d = dir(rng_);
+                    ctf::Vec2Fixed r_pos = my_pos;
+                    if (d == 0) r_pos.x += step;
+                    else if (d == 1) r_pos.x -= step;
+                    else if (d == 2) r_pos.y += step;
+                    else r_pos.y -= step;
+                    if (!map_.aabb_collides(r_pos)) {
+                        if (d == 0) buttons |= ctf::kInputRight;
+                        else if (d == 1) buttons |= ctf::kInputLeft;
+                        else if (d == 2) buttons |= ctf::kInputDown;
+                        else buttons |= ctf::kInputUp;
+                    }
+                    stuck_timer_ = 0;
+                }
+            }
+        }
+
+        // Aim and shoot with imperfection.
+        uint16_t aim = 0;
+        if (have_enemy && nearest_dist < 350.0f) {
+            // Add random spread to aim.
+            const float spread = aim_spread_rng_(rng_);
+            const float angle = std::atan2(enemy_dy, enemy_dx) + spread;
+            aim = static_cast<uint16_t>(angle / (2.0f * 3.14159265f) * 65536.0f);
+            // Don't fire every tick — makes bots feel more human.
+            if (fire_chance_(rng_)) buttons |= ctf::kInputFire;
+        } else {
+            // Aim toward movement direction when no enemy.
+            if (buttons & (ctf::kInputLeft | ctf::kInputRight | ctf::kInputUp | ctf::kInputDown)) {
+                float mx = 0, my = 0;
+                if (buttons & ctf::kInputRight) mx += 1;
+                if (buttons & ctf::kInputLeft) mx -= 1;
+                if (buttons & ctf::kInputDown) my += 1;
+                if (buttons & ctf::kInputUp) my -= 1;
+                aim = static_cast<uint16_t>(
+                    std::atan2(my, mx) / (2.0f * 3.14159265f) * 65536.0f);
+            }
+        }
+
+        return ctf::InputCmd{buttons, aim};
     }
 
 private:
-    void pick_new() {
-        static const uint8_t kMoveBits[] = {
-            ctf::kInputUp,   ctf::kInputDown,  ctf::kInputLeft, ctf::kInputRight,
-            ctf::kInputUp | ctf::kInputRight, ctf::kInputUp | ctf::kInputLeft,
-            ctf::kInputDown | ctf::kInputRight, ctf::kInputDown | ctf::kInputLeft,
-            0, // occasionally stand still
-        };
-        std::uniform_int_distribution<size_t> move_pick(0, sizeof(kMoveBits) - 1);
-        std::uniform_real_distribution<double> hold_time(0.4, 2.0);
-        std::uniform_int_distribution<int> aim_pick(0, 65535);
-        std::bernoulli_distribution fire_pick(0.15);
+    const ctf::PlayerState* find_self(const ctf::WorldSnapshot& snap) {
+        for (uint8_t i = 0; i < snap.player_count; ++i)
+            if (snap.players[i].id == my_id_) return &snap.players[i];
+        return nullptr;
+    }
 
-        uint8_t buttons = kMoveBits[move_pick(rng_)];
-        if (fire_pick(rng_)) buttons |= ctf::kInputFire;
-        current_ = ctf::InputCmd{buttons, static_cast<uint16_t>(aim_pick(rng_))};
-        remaining_ = hold_time(rng_);
+    ctf::Vec2Fixed resolve_flag_pos(const ctf::WorldSnapshot& snap, ctf::Team flag_team) {
+        const bool is_red = (flag_team == ctf::Team::Red);
+        const auto state = is_red ? snap.flag_state_red : snap.flag_state_blue;
+        const auto carrier = is_red ? snap.flag_carrier_red : snap.flag_carrier_blue;
+        if (state == ctf::FlagState::Carried && carrier < ctf::config::kMaxPlayers) {
+            for (uint8_t i = 0; i < snap.player_count; ++i)
+                if (snap.players[i].id == carrier) return snap.players[i].motion.position;
+        }
+        return is_red ? ctf::kRedBasePosition : ctf::kBlueBasePosition;
     }
 
     std::mt19937 rng_;
-    ctf::InputCmd current_{};
-    double remaining_ = 0.0;
+    uint8_t my_id_;
+    ctf::Team my_team_;
+    ctf::Map map_;
+    std::uniform_real_distribution<float> aim_spread_rng_;
+    std::bernoulli_distribution fire_chance_;
+    int stuck_timer_;
 };
 
 // Same idle/repeat-last-history pattern as client/main.cpp's
@@ -152,10 +286,18 @@ int run_single_bot(const BotArgs& args, int bot_index) {
     ctf::Prediction prediction;
     ctf::WorldSnapshot latest_snapshot{};
     bool have_snapshot = false;
-    bool start_requested = false;
 
-    WanderingInput wander(static_cast<uint32_t>(bot_index) * 7919u +
-                         static_cast<uint32_t>(::getpid()));
+    // Wait for other bots to join before requesting start. The first bot
+    // becomes host; if it sends start_request immediately, the match fails
+    // to begin (< 2 players) and never retries. A 2-second delay lets all
+    // forked children connect first.
+    auto connect_time = std::chrono::steady_clock::now();
+    bool can_start = false;
+
+    // BotAI needs to know the player's team, which we learn from GAME_START.
+    // Start with a placeholder; re-created once we know the team.
+    ctf::Team my_team = ctf::Team::Red;
+    std::unique_ptr<BotAI> ai;
 
     const double tick_dt = 1.0 / ctf::config::kTickRateHz;
     double accumulator = 0.0;
@@ -174,17 +316,31 @@ int run_single_bot(const BotArgs& args, int bot_index) {
             have_snapshot = true;
             prediction.on_snapshot(snap, my_id);
         }
-        net.take_events(); // drained, not otherwise used (no render/HUD)
+        // Check GAME_START event to learn our team.
+        for (const auto& ev : net.take_events()) {
+            if (auto* gs = std::get_if<ctf::protocol::MsgGameStart>(&ev)) {
+                for (uint8_t i = 0; i < gs->player_count; ++i) {
+                    if (gs->ids[i] == my_id) {
+                        my_team = gs->teams[i];
+                        ai = std::make_unique<BotAI>(
+                            static_cast<uint32_t>(bot_index) * 7919u +
+                                static_cast<uint32_t>(::getpid()),
+                            my_id, my_team);
+                        break;
+                    }
+                }
+            }
+        }
 
-        // Self-elect to start the match if this bot happens to be the host
-        // (e.g. a bots-only test run with no human ctf_client driving the
-        // lobby) - not specified by README, a reasonable default for an
-        // automated load-testing tool. A one-tick settle delay isn't needed
-        // here: by the time is_host() can be true, LOBBY_STATE has already
-        // reflected the full roster this bot knows about.
-        if (!net.game_started() && net.is_host() && !start_requested) {
-            net.send_start_request();
-            start_requested = true;
+        // Self-elect to start the match if this bot happens to be the host,
+        // but only after a 2-second delay to let all bots connect first.
+        if (!net.game_started() && net.is_host()) {
+            if (!can_start) {
+                const auto elapsed = std::chrono::steady_clock::now() - connect_time;
+                if (std::chrono::duration<double>(elapsed).count() >= 2.0)
+                    can_start = true;
+            }
+            if (can_start) net.send_start_request();
         }
 
         int ticks_this_frame = 0;
@@ -198,8 +354,11 @@ int run_single_bot(const BotArgs& args, int bot_index) {
                 return self != nullptr && self->alive;
             }();
 
-            if (alive_in_match) {
-                prediction.on_local_tick(wander.next(tick_dt));
+            if (alive_in_match && ai) {
+                prediction.on_local_tick(ai->tick(latest_snapshot));
+            } else if (alive_in_match) {
+                // Team not yet known — send idle.
+                prediction.on_local_tick(ctf::InputCmd{0, 0});
             }
             send_current_input(net, prediction); // always - see comment above
         }
@@ -240,7 +399,14 @@ int main(int argc, char** argv) {
             std::exit(run_single_bot(args, i));
         }
         children.push_back(pid);
+        // Small stagger so the server can accept each connection before
+        // the next one arrives. Without this, all children connect
+        // simultaneously and some may get dropped under load.
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+
+    std::printf("ctf_bot: all %zu bot processes spawned, waiting...\n",
+               children.size());
 
     // The parent doesn't touch any socket itself - it only supervises. A
     // no-op-ish handler here just keeps the parent alive through Ctrl-C
