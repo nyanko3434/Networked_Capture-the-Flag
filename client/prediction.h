@@ -54,7 +54,7 @@ private:
     PlayerMotion local_state_;
     RingBuffer<InputHistoryEntry, config::kInputHistoryRingSize> history_;
     uint32_t mispredictions_ = 0;
-    Map map_; // stateless tile grid (README §7.1) - movement_step needs one
+    const Map& map_ = Map::instance(); // stateless tile grid (README §7.1)
 };
 
 } // namespace ctf

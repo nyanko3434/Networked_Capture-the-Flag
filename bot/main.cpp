@@ -221,7 +221,7 @@ private:
     std::mt19937 rng_;
     uint8_t my_id_;
     ctf::Team my_team_;
-    ctf::Map map_;
+    const ctf::Map& map_ = ctf::Map::instance();
     std::uniform_real_distribution<float> aim_spread_rng_;
     std::bernoulli_distribution fire_chance_;
 };
