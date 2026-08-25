@@ -92,10 +92,19 @@ void draw_map_walls(const Map& map) {
 void draw_flag(Vec2Fixed pos, Team team) {
     const float cx = to_px(pos.x) + config::kPlayerSizePx / 2.0f;
     const float cy = to_px(pos.y) + config::kPlayerSizePx / 2.0f;
-    DrawTriangle(Vector2{cx - 6, cy + 10}, Vector2{cx - 6, cy - 10},
-                Vector2{cx + 8, cy - 4}, team_color(team));
-    DrawLine(static_cast<int>(cx - 6), static_cast<int>(cy - 10),
-             static_cast<int>(cx - 6), static_cast<int>(cy + 10), BLACK);
+    const Color c = team_color(team);
+
+    // Pole: vertical line
+    const float pole_top = cy - 16;
+    const float pole_bottom = cy + 12;
+    DrawLineEx(Vector2{cx - 6, pole_top}, Vector2{cx - 6, pole_bottom}, 2.0f, WHITE);
+
+    // Flag pennant: larger triangle
+    DrawTriangle(Vector2{cx - 6, pole_top}, Vector2{cx - 6, pole_top + 12},
+                Vector2{cx + 10, pole_top + 6}, c);
+    // Outline for extra visibility
+    DrawTriangleLines(Vector2{cx - 6, pole_top}, Vector2{cx - 6, pole_top + 12},
+                     Vector2{cx + 10, pole_top + 6}, WHITE);
 }
 
 } // namespace
@@ -125,10 +134,26 @@ void Renderer::on_event(const GameEvent& ev) {
     if (const auto* dropped = std::get_if<protocol::MsgFlagDropped>(&ev)) {
         if (dropped->flag_team == Team::Red) dropped_flag_pos_red_ = dropped->position;
         else dropped_flag_pos_blue_ = dropped->position;
+        messages_.push_back({"Flag dropped!", GetTime()});
     }
-    // FlagPickedUp/FlagReturned/FlagCaptured all move the flag out of the
-    // Dropped state; the cached position is simply not read again until the
-    // next FLAG_DROPPED, so nothing needs to happen for those here.
+    if (const auto* shot = std::get_if<protocol::MsgShotFired>(&ev)) {
+        tracers_.push_back({shot->origin, shot->hit_point, GetTime()});
+    }
+    if (const auto* killed = std::get_if<protocol::MsgPlayerKilled>(&ev)) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "Player %u killed by %u",
+                     killed->victim_id, killed->killer_id);
+        messages_.push_back({buf, GetTime()});
+    }
+    if (std::get_if<protocol::MsgFlagCaptured>(&ev)) {
+        messages_.push_back({"FLAG CAPTURED!", GetTime()});
+    }
+    if (std::get_if<protocol::MsgFlagReturned>(&ev)) {
+        messages_.push_back({"Flag returned to base", GetTime()});
+    }
+    if (std::get_if<protocol::MsgFlagPickedUp>(&ev)) {
+        messages_.push_back({"Flag picked up!", GetTime()});
+    }
 }
 
 void Renderer::draw_waiting_screen(const char* line1, const char* line2) {
@@ -165,14 +190,30 @@ void Renderer::draw_frame(const WorldSnapshot& latest, uint8_t my_player_id,
     ClearBackground(Color{20, 20, 24, 255});
 
     draw_map_walls(map);
-    DrawRectangle(static_cast<int>(to_px(kRedBasePosition.x)),
-                 static_cast<int>(to_px(kRedBasePosition.y)),
-                 config::kPlayerSizePx, config::kPlayerSizePx,
-                 Fade(team_color(Team::Red), 0.4f));
-    DrawRectangle(static_cast<int>(to_px(kBlueBasePosition.x)),
-                 static_cast<int>(to_px(kBlueBasePosition.y)),
-                 config::kPlayerSizePx, config::kPlayerSizePx,
-                 Fade(team_color(Team::Blue), 0.4f));
+
+    // Bases: large colored zones with labels (3x3 tiles centered on base pos).
+    const int base_zone_size = config::kTileSizePx * 3; // 96px
+    const int base_half = base_zone_size / 2;
+    {
+        const float rx = to_px(kRedBasePosition.x) + config::kPlayerSizePx / 2.0f - base_half;
+        const float ry = to_px(kRedBasePosition.y) + config::kPlayerSizePx / 2.0f - base_half;
+        DrawRectangle(static_cast<int>(rx), static_cast<int>(ry),
+                     base_zone_size, base_zone_size, Fade(team_color(Team::Red), 0.25f));
+        DrawRectangleLines(static_cast<int>(rx), static_cast<int>(ry),
+                          base_zone_size, base_zone_size, Fade(team_color(Team::Red), 0.6f));
+        DrawText("RED BASE", static_cast<int>(rx) + 8, static_cast<int>(ry) + base_zone_size + 4,
+                14, Fade(team_color(Team::Red), 0.8f));
+    }
+    {
+        const float bx = to_px(kBlueBasePosition.x) + config::kPlayerSizePx / 2.0f - base_half;
+        const float by = to_px(kBlueBasePosition.y) + config::kPlayerSizePx / 2.0f - base_half;
+        DrawRectangle(static_cast<int>(bx), static_cast<int>(by),
+                     base_zone_size, base_zone_size, Fade(team_color(Team::Blue), 0.25f));
+        DrawRectangleLines(static_cast<int>(bx), static_cast<int>(by),
+                          base_zone_size, base_zone_size, Fade(team_color(Team::Blue), 0.6f));
+        DrawText("BLUE BASE", static_cast<int>(bx) + 4, static_cast<int>(by) + base_zone_size + 4,
+                14, Fade(team_color(Team::Blue), 0.8f));
+    }
 
     // Flags (README §7.4 states; position sourcing per on_event()'s doc
     // comment and render_policy::resolve_flag_position).
@@ -201,6 +242,9 @@ void Renderer::draw_frame(const WorldSnapshot& latest, uint8_t my_player_id,
             if (raw.alive) {
                 draw_aim_indicator(pos, raw.aim_angle);
                 draw_health_bar(pos, raw.health);
+                if (raw.carrying_flag) {
+                    draw_flag(pos, raw.team == Team::Red ? Team::Blue : Team::Red);
+                }
             }
 
             // F3: translucent outline at the authoritative position,
@@ -225,8 +269,29 @@ void Renderer::draw_frame(const WorldSnapshot& latest, uint8_t my_player_id,
             if (shown.alive) {
                 draw_aim_indicator(shown.motion.position, shown.aim_angle);
                 draw_health_bar(shown.motion.position, shown.health);
+                if (shown.carrying_flag) {
+                    draw_flag(shown.motion.position,
+                             shown.team == Team::Red ? Team::Blue : Team::Red);
+                }
             }
         }
+    }
+
+    // Shot tracers: fading lines from origin to hit point.
+    {
+        const double now = GetTime();
+        size_t write = 0;
+        for (size_t i = 0; i < tracers_.size(); ++i) {
+            const double age = now - tracers_[i].spawn_time;
+            if (age >= kTracerLifetimeSec) continue;
+            const float alpha = 1.0f - static_cast<float>(age / kTracerLifetimeSec);
+            const Color c = Fade(YELLOW, alpha);
+            DrawLineEx(Vector2{to_px(tracers_[i].origin.x), to_px(tracers_[i].origin.y)},
+                      Vector2{to_px(tracers_[i].hit_point.x), to_px(tracers_[i].hit_point.y)},
+                      2.0f, c);
+            tracers_[write++] = tracers_[i];
+        }
+        tracers_.resize(write);
     }
 
     // Scoreboard/timer.
@@ -235,6 +300,50 @@ void Renderer::draw_frame(const WorldSnapshot& latest, uint8_t my_player_id,
                  latest.score_red, latest.score_blue,
                  latest.seconds_remaining / 60, latest.seconds_remaining % 60);
     DrawText(score_buf, 12, 8, 20, RAYWHITE);
+
+    // Carrying-flag indicator: big prompt + arrow pointing to own base.
+    {
+        const PlayerState* self = nullptr;
+        for (uint8_t i = 0; i < latest.player_count; ++i) {
+            if (latest.players[i].id == my_player_id) { self = &latest.players[i]; break; }
+        }
+        if (self != nullptr && self->carrying_flag) {
+            const int w = GetScreenWidth();
+            DrawText("CARRYING FLAG - Return to your base!",
+                    w / 2 - MeasureText("CARRYING FLAG - Return to your base!", 20) / 2,
+                    36, 20, YELLOW);
+
+            // Arrow pointing from player toward their base.
+            const Vec2Fixed& base = self->team == Team::Red ? kRedBasePosition : kBlueBasePosition;
+            const float px = to_px(self->motion.position.x) + config::kPlayerSizePx / 2.0f;
+            const float py = to_px(self->motion.position.y) + config::kPlayerSizePx / 2.0f;
+            const float bx = to_px(base.x) + config::kPlayerSizePx / 2.0f;
+            const float by = to_px(base.y) + config::kPlayerSizePx / 2.0f;
+            const float dx = bx - px;
+            const float dy = by - py;
+            const float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist > 20.0f) {
+                const float nx = dx / dist;
+                const float ny = dy / dist;
+                const float arrow_len = 40.0f;
+                const float ax = px + nx * 30.0f;
+                const float ay = py + ny * 30.0f;
+                DrawLineEx(Vector2{ax, ay},
+                          Vector2{ax + nx * arrow_len, ay + ny * arrow_len},
+                          3.0f, YELLOW);
+                // Arrowhead.
+                const float head = 8.0f;
+                DrawLineEx(Vector2{ax + nx * arrow_len, ay + ny * arrow_len},
+                          Vector2{ax + nx * (arrow_len - head) - ny * head,
+                                  ay + ny * (arrow_len - head) + nx * head},
+                          3.0f, YELLOW);
+                DrawLineEx(Vector2{ax + nx * arrow_len, ay + ny * arrow_len},
+                          Vector2{ax + nx * (arrow_len - head) + ny * head,
+                                  ay + ny * (arrow_len - head) - nx * head},
+                          3.0f, YELLOW);
+            }
+        }
+    }
 
     // HUD (README §6.6): RTT, unacked input count, misprediction rate,
     // snapshot buffer depth, actual tick rate.
@@ -249,6 +358,25 @@ void Renderer::draw_frame(const WorldSnapshot& latest, uint8_t my_player_id,
         interpolation_enabled_ ? "ON" : "OFF",
         show_server_ghost_ ? "ON" : "OFF");
     DrawText(hud_buf, 12, config::kMapHeightPx - 44, 16, RAYWHITE);
+
+    // Game event message feed (kills, flag events).
+    {
+        const double now = GetTime();
+        size_t write = 0;
+        int msg_y = 60;
+        for (size_t i = 0; i < messages_.size(); ++i) {
+            const double age = now - messages_[i].spawn_time;
+            if (age >= kMessageLifetimeSec) continue;
+            const float alpha = age < kMessageLifetimeSec - 0.5f
+                ? 1.0f
+                : static_cast<float>((kMessageLifetimeSec - age) / 0.5f);
+            DrawText(messages_[i].text.c_str(), 12, msg_y, 16,
+                    Fade(YELLOW, alpha));
+            msg_y += 18;
+            messages_[write++] = messages_[i];
+        }
+        messages_.resize(write);
+    }
 
     EndDrawing();
 }

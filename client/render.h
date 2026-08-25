@@ -6,6 +6,8 @@
 // <raylib.h>.
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "game_types.h"
 #include "interpolation.h"
@@ -84,6 +86,23 @@ private:
     // while the corresponding flag_state is FlagState::Dropped.
     Vec2Fixed dropped_flag_pos_red_{};
     Vec2Fixed dropped_flag_pos_blue_{};
+
+    // Shot tracers for visual feedback (MsgShotFired events).
+    struct Tracer {
+        Vec2Fixed origin;
+        Vec2Fixed hit_point;
+        double spawn_time;
+    };
+    std::vector<Tracer> tracers_;
+    static constexpr double kTracerLifetimeSec = 0.1; // 100ms fade
+
+    // On-screen message feed for game events (kills, flag drops, captures).
+    struct GameMessage {
+        std::string text;
+        double spawn_time;
+    };
+    std::vector<GameMessage> messages_;
+    static constexpr double kMessageLifetimeSec = 4.0;
 };
 
 } // namespace ctf

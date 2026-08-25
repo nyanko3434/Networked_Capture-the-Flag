@@ -320,8 +320,12 @@ void Sim::combat() {
         }
         if ((applied_cmds_[id].buttons & kInputFire) == 0) continue;
 
+        // Cast from player center, not top-left corner — the client
+        // calculates aim angle from the center, so the origin must match.
+        const int32_t half = (config::kPlayerSizePx * config::kFixedScale) / 2;
+        const Vec2Fixed center{p.position.x + half, p.position.y + half};
         size_t enemy = config::kMaxPlayers;
-        const bool hit = cast_ray(p.position, applied_cmds_[id].aim_angle,
+        const bool hit = cast_ray(center, applied_cmds_[id].aim_angle,
                                   p.team, &enemy);
 
         // SHOT_FIRED is cosmetic and loss-tolerant -> UDP (README §5.4).
@@ -362,10 +366,10 @@ void Sim::combat() {
 
 namespace {
 
-bool aabb_contains(const Vec2Fixed& box_top_left, const Vec2Fixed& point) {
+bool aabb_overlap(const Vec2Fixed& a, const Vec2Fixed& b) {
     const int32_t box = config::kPlayerSizePx * config::kFixedScale;
-    return point.x >= box_top_left.x && point.x < box_top_left.x + box &&
-           point.y >= box_top_left.y && point.y < box_top_left.y + box;
+    return a.x < b.x + box && a.x + box > b.x &&
+           a.y < b.y + box && a.y + box > b.y;
 }
 
 } // namespace
@@ -404,7 +408,7 @@ void Sim::flags_phase() {
         // Own dropped flag touched -> instant return to base.
         FlagInfo& own = flags_[own_fi];
         if (own.state == FlagState::Dropped &&
-            aabb_contains(p.position, own.position)) {
+            aabb_overlap(p.position, own.position)) {
             own.state = FlagState::AtBase;
             own.position = base_of(p.team);
             own.carrier_id = 0xFF;
@@ -419,7 +423,7 @@ void Sim::flags_phase() {
         // Enemy flag touch -> pickup (at base or dropped, not carried).
         FlagInfo& enemy = flags_[enemy_fi];
         if (!p.carrying_flag && enemy.state != FlagState::Carried &&
-            aabb_contains(p.position, enemy.position)) {
+            aabb_overlap(p.position, enemy.position)) {
             enemy.state = FlagState::Carried;
             enemy.carrier_id = static_cast<uint8_t>(id);
             p.carrying_flag = true;
@@ -438,7 +442,7 @@ void Sim::flags_phase() {
         // that makes defense matter).
         const Team enemy_team = p.team == Team::Red ? Team::Blue : Team::Red;
         if (p.carrying_flag && own.state == FlagState::AtBase &&
-            aabb_contains(p.position, base_of(p.team))) {
+            aabb_overlap(p.position, base_of(p.team))) {
             p.carrying_flag = false;
             enemy.state = FlagState::AtBase;
             enemy.position = base_of(enemy_team);
