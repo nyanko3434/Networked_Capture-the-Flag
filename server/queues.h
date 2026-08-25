@@ -62,6 +62,7 @@ enum class OutboundEventType : uint8_t {
     TcpBroadcast,
     UdpSnapshot,
     UdpEvent, // cosmetic SHOT_FIRED tracers (loss-tolerant)
+    MatchReset, // sim -> network: match ended, return to lobby
 };
 
 // Snapshots/events flowing sim thread -> network thread.

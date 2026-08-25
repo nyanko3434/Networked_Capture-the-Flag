@@ -496,6 +496,9 @@ void Sim::win_check() {
         ser_event(ev, protocol::MessageType::MatchEnd,
                   protocol::MsgMatchEnd{winner, score_[0], score_[1]});
         outbound_.push(ev);
+
+        // Start the post-match countdown.
+        post_match_countdown_ = kPostMatchDelayTicks;
     }
 }
 
@@ -567,6 +570,57 @@ void Sim::publish() {
 
 void Sim::tick() {
     drain_inbound();
+
+    // Post-match countdown: after delay, reset and signal network thread
+    // to return to lobby.
+    if (match_over_ && post_match_countdown_ >= 0) {
+        --post_match_countdown_;
+        if (post_match_countdown_ < 0) {
+            // Reset sim state for a new match.
+            for (auto& p : players_) {
+                if (p.active) {
+                    p.alive = true;
+                    p.health = config::kMaxHealth;
+                    p.carrying_flag = false;
+                    p.respawn_timer = 0;
+                    p.fire_cooldown = 0;
+                    p.ring_head = 0;
+                    p.ring_count = 0;
+                    p.last_input_seq = 0;
+                    p.newest_seq_ = 0;
+                    // Respawn at base.
+                    const Vec2Fixed* spawns = (p.team == Team::Blue)
+                        ? kBlueSpawnPoints : kRedSpawnPoints;
+                    p.position = spawns[p.spawn_index];
+                }
+            }
+            flags_[0] = FlagInfo{};
+            flags_[0].position = kRedBasePosition;
+            flags_[1] = FlagInfo{};
+            flags_[1].position = kBlueBasePosition;
+            score_[0] = 0;
+            score_[1] = 0;
+            current_tick_ = 0;
+            match_over_ = false;
+
+            // Tell the network thread to end the match in the lobby.
+            OutboundEvent ev;
+            ev.type = OutboundEventType::MatchReset;
+            outbound_.push(ev);
+        }
+        // Still publish snapshots during countdown so clients see the frozen state.
+        publish();
+        ++current_tick_;
+        return;
+    }
+
+    if (match_over_) {
+        // Countdown already fired, just keep publishing frozen state.
+        publish();
+        ++current_tick_;
+        return;
+    }
+
     pop_inputs();
     move_players();
     combat();

@@ -580,6 +580,11 @@ void NetServer::handle_wake() {
                            sizeof(e->udp_addr));
                 });
                 break;
+            case OutboundEventType::MatchReset:
+                // Sim has reset — return to lobby.
+                lobby_.end_match();
+                broadcast_lobby_state();
+                break;
         }
     }
 }

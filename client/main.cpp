@@ -219,6 +219,9 @@ int main(int argc, char** argv) {
         }
 
         if (net.game_started() && have_snapshot) {
+            // If match just ended, reset the match state flag.
+            renderer.reset_match_state();
+
             ctf::HudMetrics hud;
             hud.unacked_input_count =
                 static_cast<uint32_t>(prediction.history().size());
@@ -237,6 +240,9 @@ int main(int argc, char** argv) {
             hud.actual_tick_rate_hz = measured_tick_hz;
             renderer.draw_frame(latest_snapshot, my_id, prediction, interpolation,
                                hud);
+        } else if (renderer.match_ended()) {
+            // Match ended, waiting for server to reset and return to lobby.
+            renderer.draw_results_screen();
         } else if (net.is_host()) {
             renderer.draw_waiting_screen(
                 "Waiting for players...",

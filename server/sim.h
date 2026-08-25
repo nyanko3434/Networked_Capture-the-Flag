@@ -129,6 +129,11 @@ private:
     uint32_t current_tick_ = 0;
     bool match_over_ = false;
     bool running_ = false;
+
+    // Post-match countdown: after MATCH_END, wait this many ticks before
+    // resetting and returning to lobby. Gives players time to see results.
+    static constexpr int kPostMatchDelayTicks = 150; // 5 seconds at 30Hz
+    int post_match_countdown_ = -1; // -1 = not counting
 };
 
 } // namespace ctf

@@ -157,6 +157,12 @@ void Renderer::on_event(const GameEvent& ev) {
     if (std::get_if<protocol::MsgFlagPickedUp>(&ev)) {
         messages_.push_back({"Flag picked up!", GetTime()});
     }
+    if (const auto* end = std::get_if<protocol::MsgMatchEnd>(&ev)) {
+        match_ended_ = true;
+        winner_ = end->winning_team;
+        final_score_red_ = end->score_red;
+        final_score_blue_ = end->score_blue;
+    }
 }
 
 void Renderer::draw_waiting_screen(const char* line1, const char* line2) {
@@ -173,6 +179,36 @@ void Renderer::draw_waiting_screen(const char* line1, const char* line2) {
         const int tw2 = MeasureText(line2, 18);
         DrawText(line2, (w - tw2) / 2, h / 2 + 14, 18, LIGHTGRAY);
     }
+    EndDrawing();
+}
+
+void Renderer::draw_results_screen() {
+    if (!initialized_) return;
+    BeginDrawing();
+    ClearBackground(Color{20, 20, 24, 255});
+
+    const int w = GetScreenWidth();
+    const int h = GetScreenHeight();
+
+    // Winner announcement.
+    const char* winner_text = (winner_ == Team::Red) ? "RED TEAM WINS!" : "BLUE TEAM WINS!";
+    const Color winner_color = (winner_ == Team::Red)
+        ? Color{200, 40, 40, 255} : Color{40, 90, 220, 255};
+    const int tw = MeasureText(winner_text, 40);
+    DrawText(winner_text, (w - tw) / 2, h / 2 - 80, 40, winner_color);
+
+    // Score.
+    char score_buf[64];
+    std::snprintf(score_buf, sizeof(score_buf), "RED %u - %u BLUE",
+                 final_score_red_, final_score_blue_);
+    const int sw = MeasureText(score_buf, 30);
+    DrawText(score_buf, (w - sw) / 2, h / 2 - 20, 30, RAYWHITE);
+
+    // Returning message.
+    const char* return_text = "Returning to lobby...";
+    const int rw = MeasureText(return_text, 18);
+    DrawText(return_text, (w - rw) / 2, h / 2 + 40, 18, LIGHTGRAY);
+
     EndDrawing();
 }
 

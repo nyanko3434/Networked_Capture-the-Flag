@@ -67,6 +67,9 @@ public:
     // issues raylib drawing calls.
     void draw_waiting_screen(const char* line1, const char* line2);
 
+    // Match results screen shown after MATCH_END.
+    void draw_results_screen();
+
     // Debug toggle state (README §6.6). The toggles themselves are polled
     // from raylib key state (F1/F2/F3) inside draw_frame() - this is the
     // one file allowed to touch raylib (README §4) - these accessors exist
@@ -74,6 +77,10 @@ public:
     bool prediction_enabled() const { return prediction_enabled_; }
     bool interpolation_enabled() const { return interpolation_enabled_; }
     bool show_server_ghost() const { return show_server_ghost_; }
+
+    // Call when returning to lobby to clear match results state.
+    void reset_match_state() { match_ended_ = false; }
+    bool match_ended() const { return match_ended_; }
 
 private:
     bool initialized_ = false;
@@ -103,6 +110,12 @@ private:
     };
     std::vector<GameMessage> messages_;
     static constexpr double kMessageLifetimeSec = 4.0;
+
+    // Match results state.
+    bool match_ended_ = false;
+    Team winner_ = Team::Red;
+    uint8_t final_score_red_ = 0;
+    uint8_t final_score_blue_ = 0;
 };
 
 } // namespace ctf
