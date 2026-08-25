@@ -61,7 +61,7 @@ NetServer::NetServer(uint16_t port, InboundQueue& inbound,
       udp_silence_ms_(udp_silence_ms) {}
 
 NetServer::~NetServer() {
-    for (auto& entry : registry_.entries()) {
+    for (const auto& entry : registry_.storage()) {
         if (entry.tcp_fd >= 0) {
             close(entry.tcp_fd);
         }
@@ -151,9 +151,11 @@ void NetServer::run() {
         }
 
         // POLLOUT interest follows pending-buffer occupancy.
-        for (const auto& entry : registry_.entries()) {
-            poller_->set_watch_write(entry.tcp_fd,
-                                     !entry.pending_out.empty());
+        for (const auto& entry : registry_.storage()) {
+            if (entry.tcp_fd >= 0) {
+                poller_->set_watch_write(entry.tcp_fd,
+                                         !entry.pending_out.empty());
+            }
         }
 
         enforce_pending_cap();
@@ -351,15 +353,15 @@ void NetServer::on_join_lobby(int fd, const protocol::MsgJoinLobby& msg) {
 
 void NetServer::broadcast_lobby_state() {
     protocol::MsgLobbyState st;
-    const auto entries = registry_.entries();
-    st.player_count = static_cast<uint8_t>(entries.size());
-    int i = 0;
-    for (const auto& e : entries) {
-        if (i >= config::kMaxPlayers) break;
-        st.ids[i] = e.player_id;
-        std::snprintf(st.names[i], sizeof(st.names[i]), "%s",
-                      e.name.c_str());
-        ++i;
+    const auto& storage = registry_.storage();
+    st.player_count = 0;
+    for (const auto& e : storage) {
+        if (e.tcp_fd < 0) continue;
+        if (st.player_count >= config::kMaxPlayers) break;
+        st.ids[st.player_count] = e.player_id;
+        std::snprintf(st.names[st.player_count], sizeof(st.names[st.player_count]),
+                      "%s", e.name.c_str());
+        ++st.player_count;
     }
     st.host_id = lobby_.host_id();
 
@@ -533,15 +535,17 @@ void NetServer::handle_wake() {
     while (outbound_.pop(ev)) {
         switch (ev.type) {
             case OutboundEventType::UdpSnapshot:
-                send_udp_snapshots(registry_, udp_fd_, ev.payload,
-                                   ev.acks, ev.tick);
+                send_udp_snapshots(registry_, udp_fd_, ev.payload_ptr(),
+                                   ev.payload_len(), ev.acks, ev.tick);
                 ++udp_snapshots_sent_;
                 break;
             case OutboundEventType::TcpBroadcast:
                 // Frame it once ([u16 len][u8 type][payload], README §5.3):
                 // sim events arrive as [u8 type][encoded fields].
-                if (!ev.payload.empty()) {
-                    broadcast_tcp_event(registry_, frame_payload(ev.payload));
+                if (!ev.payload_empty()) {
+                    std::vector<uint8_t> payload_vec(
+                        ev.payload_ptr(), ev.payload_ptr() + ev.payload_len());
+                    broadcast_tcp_event(registry_, frame_payload(payload_vec));
                     ++tcp_events_fanned_out_;
                 }
                 break;
@@ -550,39 +554,39 @@ void NetServer::handle_wake() {
                 // ev.payload is [u8 type][encoded fields] from ser_event();
                 // the type byte goes into the UDP header (dgram[3]), and
                 // only the encoded fields go into the body (skip byte 0).
-                for (const auto& entry : registry_.entries()) {
-                    if (entry.has_udp_addr) {
-                        ClientEntry* e =
-                            registry_.find_by_id(entry.player_id);
-                        if (e == nullptr) continue;
-                        const size_t body_len =
-                            ev.payload.size() > 1 ? ev.payload.size() - 1 : 0;
-                        std::vector<uint8_t> dgram(
-                            config::kUdpHeaderBytes + body_len);
-                        dgram[0] = protocol::kMagic >> 8;
-                        dgram[1] = protocol::kMagic & 0xFF;
-                        dgram[2] = protocol::kProtocolVersion;
-                        dgram[3] =
-                            ev.payload.empty() ? 0 : ev.payload[0];
-                        if (body_len > 0) {
-                            std::copy(ev.payload.begin() + 1,
-                                      ev.payload.end(),
-                                      dgram.begin() +
-                                          config::kUdpHeaderBytes);
-                        }
-                        sendto(udp_fd_, dgram.data(), dgram.size(), 0,
-                               reinterpret_cast<const sockaddr*>(
-                                   &e->udp_addr),
-                               sizeof(e->udp_addr));
+                registry_.for_each_live([&](const ClientEntry& entry) {
+                    if (!entry.has_udp_addr) return;
+                    ClientEntry* e =
+                        registry_.find_by_id(entry.player_id);
+                    if (e == nullptr) return;
+                    const size_t body_len =
+                        ev.payload_len() > 1 ? ev.payload_len() - 1 : 0;
+                    std::vector<uint8_t> dgram(
+                        config::kUdpHeaderBytes + body_len);
+                    dgram[0] = protocol::kMagic >> 8;
+                    dgram[1] = protocol::kMagic & 0xFF;
+                    dgram[2] = protocol::kProtocolVersion;
+                    dgram[3] =
+                        ev.payload_empty() ? 0 : ev.payload_data[0];
+                    if (body_len > 0) {
+                        std::copy(ev.payload_ptr() + 1,
+                                  ev.payload_ptr() + ev.payload_len(),
+                                  dgram.begin() +
+                                      config::kUdpHeaderBytes);
                     }
-                }
+                    sendto(udp_fd_, dgram.data(), dgram.size(), 0,
+                           reinterpret_cast<const sockaddr*>(
+                               &e->udp_addr),
+                           sizeof(e->udp_addr));
+                });
                 break;
         }
     }
 }
 
 void NetServer::enforce_pending_cap() {
-    for (const auto& entry : registry_.entries()) {
+    for (const auto& entry : registry_.storage()) {
+        if (entry.tcp_fd < 0) continue;
         if (entry.pending_out.size() >
             config::kTcpPendingBufferCapBytes) {
             ClientEntry* e = registry_.find_by_id(entry.player_id);
@@ -593,7 +597,8 @@ void NetServer::enforce_pending_cap() {
 
 void NetServer::check_silence_timeouts() {
     last_silence_check_ms_ = now_ms();
-    for (const auto& entry : registry_.entries()) {
+    for (const auto& entry : registry_.storage()) {
+        if (entry.tcp_fd < 0) continue;
         if (last_silence_check_ms_ - entry.last_input_tick >
             static_cast<uint32_t>(udp_silence_ms_)) {
             ClientEntry* e = registry_.find_by_id(entry.player_id);

@@ -81,14 +81,4 @@ ClientEntry* ClientRegistry::find_by_fd(int tcp_fd) {
     return nullptr;
 }
 
-std::vector<ClientEntry> ClientRegistry::entries() const {
-    std::vector<ClientEntry> live;
-    for (const auto& e : storage_) {
-        if (e.tcp_fd != kFreeFd) {
-            live.push_back(e);
-        }
-    }
-    return live;
-}
-
 } // namespace ctf

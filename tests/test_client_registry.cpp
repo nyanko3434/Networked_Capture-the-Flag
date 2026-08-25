@@ -8,6 +8,16 @@
 using ctf::ClientEntry;
 using ctf::ClientRegistry;
 
+namespace {
+int count_live(const ClientRegistry& reg) {
+    int n = 0;
+    for (const auto& e : reg.storage()) {
+        if (e.tcp_fd >= 0) ++n;
+    }
+    return n;
+}
+} // namespace
+
 TEST_CASE("add assigns the lowest free player_id and find_by_id returns it") {
     ClientRegistry reg;
 
@@ -48,7 +58,7 @@ TEST_CASE("remove makes lookups fail with no stale pointers") {
     // Removing again is a clean no-op.
     reg.remove(a->player_id);
     CHECK(reg.find_by_id(a->player_id) == nullptr);
-    CHECK(reg.entries().size() == 1);
+    CHECK(count_live(reg) == 1);
 }
 
 TEST_CASE("ids are reused lowest-first after removal") {
@@ -88,11 +98,22 @@ TEST_CASE("registry caps at kMaxPlayers") {
     for (int i = 0; i < ctf::config::kMaxPlayers; ++i) {
         REQUIRE(reg.add(100 + i, "p" + std::to_string(i)) != nullptr);
     }
-    CHECK(reg.entries().size() == ctf::config::kMaxPlayers);
+    CHECK(reg.storage().size() == ctf::config::kMaxPlayers);
 
     // Full roster: an 11th add must fail (caller maps this to JOIN_REJECT).
     CHECK(reg.add(999, "overflow") == nullptr);
 
-    reg.remove(reg.entries().front().player_id);
-    CHECK(reg.entries().size() == ctf::config::kMaxPlayers - 1);
+    // Find first live entry to remove.
+    uint8_t first_id = 0xFF;
+    for (const auto& e : reg.storage()) {
+        if (e.tcp_fd >= 0) { first_id = e.player_id; break; }
+    }
+    REQUIRE(first_id != 0xFF);
+    reg.remove(first_id);
+    // Count live entries after removal.
+    int live = 0;
+    for (const auto& e : reg.storage()) {
+        if (e.tcp_fd >= 0) ++live;
+    }
+    CHECK(live == ctf::config::kMaxPlayers - 1);
 }

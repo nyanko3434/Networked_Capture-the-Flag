@@ -276,13 +276,11 @@ void write_msg(ByteWriter& w, const protocol::MsgShotFired& m) { encode_shot_fir
 // Wire form of an event: [u8 type][encoded fields]; network side frames it.
 template <typename Msg>
 void ser_event(OutboundEvent& ev, protocol::MessageType type, const Msg& msg) {
-    ev.payload.push_back(static_cast<uint8_t>(type));
+    ev.payload_data[0] = static_cast<uint8_t>(type);
     constexpr size_t kMaxPayload = 96;
-    const size_t start = ev.payload.size();
-    ev.payload.resize(start + kMaxPayload);
-    ByteWriter w(ev.payload.data() + start, kMaxPayload);
+    ByteWriter w(ev.payload_data.data() + 1, kMaxPayload);
     write_msg(w, msg);
-    ev.payload.resize(start + w.size());
+    ev.payload_size = static_cast<uint16_t>(1 + w.size());
 }
 
 } // namespace
@@ -545,10 +543,9 @@ void Sim::publish() {
     if (div <= 1 || current_tick_ % static_cast<uint32_t>(div) == 0) {
         OutboundEvent ev;
         ev.type = OutboundEventType::UdpSnapshot;
-        ev.payload.resize(512);
-        ByteWriter w(ev.payload.data(), ev.payload.size());
+        ByteWriter w(ev.payload_data.data(), ev.payload_data.size());
         protocol::encode_world_snapshot(w, snap);
-        ev.payload.resize(w.size());
+        ev.payload_size = static_cast<uint16_t>(w.size());
         for (int id = 0; id < config::kMaxPlayers; ++id) {
             ev.acks[id] = player_acks_[id];
         }
