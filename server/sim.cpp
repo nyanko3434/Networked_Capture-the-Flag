@@ -18,27 +18,17 @@ namespace ctf {
 
 namespace {
 
-// Integer-friendly direction table for hitscan rays (README §7.3). Built
-// once at startup; server-only combat math never reaches the client, so
-// this does not touch the desync-critical movement path.
-constexpr int32_t kTrigScale = 16384; // Q14
-struct TrigTable {
-    int32_t sin_tab[256];
-    int32_t cos_tab[256];
-    TrigTable() {
-        for (int i = 0; i < 256; ++i) {
-            const double a = i * 3.14159265358979323846 / 128.0;
-            sin_tab[i] = static_cast<int32_t>(std::sin(a) * kTrigScale);
-            cos_tab[i] = static_cast<int32_t>(std::cos(a) * kTrigScale);
-        }
-    }
-};
-const TrigTable kTrig;
-
-constexpr int32_t kRayStepFp = 4; // ~1/64 px per march step
+// Hitscan ray marching (README §7.3). The wire aim_angle has full 16-bit
+// resolution (65536 directions), so the ray direction is computed directly
+// from it instead of a coarse lookup table — a 256-entry table quantized
+// shots into ~1.4 degree intervals. Combat math is server-only and never
+// touches the desync-critical movement path, so std::cos/std::sin are fine
+// here; the march itself stays integer with a remainder accumulator.
+constexpr int kRayShift = 10;              // direction sub-step precision
+constexpr int32_t kRayScale = 1 << kRayShift;
+constexpr int32_t kRayStepFp = 8;          // max fp-units advanced per step
 constexpr int32_t kMaxRaySteps =
-    (config::kMapWidthPx > config::kMapHeightPx ? config::kMapWidthPx
-                                                : config::kMapHeightPx) *
+    (config::kMapWidthPx + config::kMapHeightPx) *
     2 * config::kFixedScale / kRayStepFp;
 
 int flag_index(Team team) { return team == Team::Blue ? 1 : 0; }
@@ -228,21 +218,34 @@ void Sim::move_players() {
 
 bool Sim::cast_ray(const Vec2Fixed& origin, uint16_t aim_angle,
                    Team shooter_team, size_t* out_enemy) {
-    const int idx = (aim_angle >> 8) & 0xFF;
-    const int32_t dir_x = (kTrig.cos_tab[idx] * kRayStepFp) / kTrigScale;
-    const int32_t dir_y = (kTrig.sin_tab[idx] * kRayStepFp) / kTrigScale;
+    // Direction from the FULL 16-bit aim angle — the old (aim_angle >> 8)
+    // table lookup was the source of 256-way direction quantization.
+    const double ang =
+        static_cast<double>(aim_angle) * 6.283185307179586 / 65536.0;
+    const int32_t step_x =
+        static_cast<int32_t>(std::llround(std::cos(ang) * kRayScale)) *
+        kRayStepFp;
+    const int32_t step_y =
+        static_cast<int32_t>(std::llround(std::sin(ang) * kRayScale)) *
+        kRayStepFp;
 
-    int32_t px = origin.x;
-    int32_t py = origin.y;
-    const int32_t box = config::kPlayerSizePx * config::kFixedScale;
+    int64_t px = origin.x;
+    int64_t py = origin.y;
+    int64_t rem_x = 0; // sub-step remainders keep the march continuous
+    int64_t rem_y = 0;
+    const int64_t box = static_cast<int64_t>(config::kPlayerSizePx) *
+                        config::kFixedScale;
+    const int64_t tile_fp = static_cast<int64_t>(config::kTileSizePx) *
+                            config::kFixedScale;
 
     for (int step = 0; step < kMaxRaySteps; ++step) {
-        px += dir_x;
-        py += dir_y;
+        rem_x += step_x; px += rem_x >> kRayShift; rem_x &= kRayScale - 1;
+        rem_y += step_y; py += rem_y >> kRayShift; rem_y &= kRayScale - 1;
 
-        if (map_.is_wall(px / (config::kTileSizePx * config::kFixedScale),
-                         py / (config::kTileSizePx * config::kFixedScale))) {
-            last_ray_hit_ = Vec2Fixed{px, py};
+        if (map_.is_wall(px / tile_fp,
+                         py / tile_fp)) {
+            last_ray_hit_ = Vec2Fixed{static_cast<int32_t>(px),
+                                      static_cast<int32_t>(py)};
             return false;
         }
 
@@ -251,13 +254,15 @@ bool Sim::cast_ray(const Vec2Fixed& origin, uint16_t aim_angle,
             if (!e.active || !e.alive || e.team == shooter_team) continue;
             if (px >= e.position.x && px < e.position.x + box &&
                 py >= e.position.y && py < e.position.y + box) {
-                last_ray_hit_ = Vec2Fixed{px, py};
+                last_ray_hit_ = Vec2Fixed{static_cast<int32_t>(px),
+                                          static_cast<int32_t>(py)};
                 *out_enemy = static_cast<size_t>(id);
                 return true;
             }
         }
     }
-    last_ray_hit_ = Vec2Fixed{px, py};
+    last_ray_hit_ = Vec2Fixed{static_cast<int32_t>(px),
+                              static_cast<int32_t>(py)};
     return false;
 }
 
@@ -334,7 +339,10 @@ void Sim::combat() {
             ev.type = OutboundEventType::UdpEvent;
             protocol::MsgShotFired msg;
             msg.shooter_id = static_cast<uint8_t>(id);
-            msg.origin = p.position;
+            // Tracer origin must be the player center (same point the aim
+            // angle is computed from and the ray is cast from), not the
+            // top-left corner of the 24x24 box.
+            msg.origin = center;
             msg.aim_angle = applied_cmds_[id].aim_angle;
             msg.hit_point = last_ray_hit_;
             ser_event(ev, protocol::MessageType::ShotFired, msg);
