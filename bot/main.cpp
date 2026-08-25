@@ -73,8 +73,7 @@ public:
     explicit BotAI(uint32_t seed, uint8_t player_id, ctf::Team team)
         : rng_(seed), my_id_(player_id), my_team_(team),
           aim_spread_rng_(0.0f, 0.3f),  // ~17 degrees of random spread
-          fire_chance_(0.4),         // 40% chance to fire per tick when enemy visible
-          stuck_timer_(0) {}
+          fire_chance_(0.4) {}           // 40% chance to fire per tick when enemy visible
 
     ctf::InputCmd tick(const ctf::WorldSnapshot& snap) {
         const ctf::PlayerState* self = find_self(snap);
@@ -119,67 +118,61 @@ public:
             target_y = static_cast<float>(flag_pos.y) / ctf::config::kFixedScale;
         }
 
-        // Movement with wall avoidance.
+        // Movement with wall avoidance: try all 4 directions, pick the
+        // one that gets closest to the target. Simple greedy approach
+        // that handles corners and narrow passages.
         const float dx = target_x - my_x;
         const float dy = target_y - my_y;
+        const int32_t step = ctf::config::kMoveSpeedFpPerTick;
         uint8_t buttons = 0;
 
-        // Try primary direction, then alternatives if blocked.
-        const int32_t step = ctf::config::kMoveSpeedFpPerTick * 2;
-        bool moved = false;
         if (std::abs(dx) > 4.0f || std::abs(dy) > 4.0f) {
-            // Try direct path first.
-            ctf::Vec2Fixed test_pos = my_pos;
-            if (std::abs(dx) > 4.0f) test_pos.x += (dx > 0 ? step : -step);
-            if (std::abs(dy) > 4.0f) test_pos.y += (dy > 0 ? step : -step);
-            if (!map_.aabb_collides(test_pos)) {
-                if (dx > 4.0f) buttons |= ctf::kInputRight;
-                else if (dx < -4.0f) buttons |= ctf::kInputLeft;
-                if (dy > 4.0f) buttons |= ctf::kInputDown;
-                else if (dy < -4.0f) buttons |= ctf::kInputUp;
-                moved = true;
-                stuck_timer_ = 0;
-            } else {
-                // Blocked — try axis-aligned alternatives.
-                ++stuck_timer_;
-                // Try horizontal only.
-                ctf::Vec2Fixed h_pos = my_pos;
-                h_pos.x += (dx > 0 ? step : -step);
-                // Try vertical only.
-                ctf::Vec2Fixed v_pos = my_pos;
-                v_pos.y += (dy > 0 ? step : -step);
+            struct Candidate { uint8_t btn; float dist; bool ok; };
+            Candidate best = {0, 1e9f, false};
 
-                const bool h_ok = !map_.aabb_collides(h_pos);
-                const bool v_ok = !map_.aabb_collides(v_pos);
+            // Test each of the 4 cardinal directions.
+            const uint8_t dirs[] = {ctf::kInputRight, ctf::kInputLeft, ctf::kInputDown, ctf::kInputUp};
+            const int32_t offsets_x[] = {step, -step, 0, 0};
+            const int32_t offsets_y[] = {0, 0, step, -step};
 
-                if (h_ok && (!v_ok || stuck_timer_ % 2 == 0)) {
-                    if (dx > 4.0f) buttons |= ctf::kInputRight;
-                    else buttons |= ctf::kInputLeft;
-                    moved = true;
-                } else if (v_ok) {
-                    if (dy > 4.0f) buttons |= ctf::kInputDown;
-                    else buttons |= ctf::kInputUp;
-                    moved = true;
-                }
+            for (int d = 0; d < 4; ++d) {
+                ctf::Vec2Fixed test = my_pos;
+                test.x += offsets_x[d];
+                test.y += offsets_y[d];
+                if (map_.aabb_collides(test)) continue;
 
-                // If completely stuck, try random perpendicular movement.
-                if (!moved && stuck_timer_ > 10) {
-                    std::uniform_int_distribution<int> dir(0, 3);
-                    const int d = dir(rng_);
-                    ctf::Vec2Fixed r_pos = my_pos;
-                    if (d == 0) r_pos.x += step;
-                    else if (d == 1) r_pos.x -= step;
-                    else if (d == 2) r_pos.y += step;
-                    else r_pos.y -= step;
-                    if (!map_.aabb_collides(r_pos)) {
-                        if (d == 0) buttons |= ctf::kInputRight;
-                        else if (d == 1) buttons |= ctf::kInputLeft;
-                        else if (d == 2) buttons |= ctf::kInputDown;
-                        else buttons |= ctf::kInputUp;
-                    }
-                    stuck_timer_ = 0;
+                const float nx = my_x + static_cast<float>(offsets_x[d]) / ctf::config::kFixedScale;
+                const float ny = my_y + static_cast<float>(offsets_y[d]) / ctf::config::kFixedScale;
+                const float ndx = target_x - nx;
+                const float ndy = target_y - ny;
+                const float ndist = ndx * ndx + ndy * ndy; // squared, no sqrt needed
+
+                if (ndist < best.dist) {
+                    best = {dirs[d], ndist, true};
                 }
             }
+
+            // Also try diagonal (combined) if both axes have distance.
+            if (std::abs(dx) > 4.0f && std::abs(dy) > 4.0f) {
+                ctf::Vec2Fixed diag = my_pos;
+                diag.x += (dx > 0 ? step : -step);
+                diag.y += (dy > 0 ? step : -step);
+                if (!map_.aabb_collides(diag)) {
+                    const float nx = my_x + static_cast<float>(dx > 0 ? step : -step) / ctf::config::kFixedScale;
+                    const float ny = my_y + static_cast<float>(dy > 0 ? step : -step) / ctf::config::kFixedScale;
+                    const float ndx = target_x - nx;
+                    const float ndy = target_y - ny;
+                    const float ndist = ndx * ndx + ndy * ndy;
+                    if (ndist < best.dist) {
+                        uint8_t combo = 0;
+                        if (dx > 0) combo |= ctf::kInputRight; else combo |= ctf::kInputLeft;
+                        if (dy > 0) combo |= ctf::kInputDown; else combo |= ctf::kInputUp;
+                        best = {combo, ndist, true};
+                    }
+                }
+            }
+
+            if (best.ok) buttons = best.btn;
         }
 
         // Aim and shoot with imperfection.
@@ -231,7 +224,6 @@ private:
     ctf::Map map_;
     std::uniform_real_distribution<float> aim_spread_rng_;
     std::bernoulli_distribution fire_chance_;
-    int stuck_timer_;
 };
 
 // Same idle/repeat-last-history pattern as client/main.cpp's
