@@ -75,6 +75,7 @@ add_executable(ctf_server
     server/queues.cpp
     server/sim.cpp
     server/broadcast.cpp
+    client/interpolation.h
 )
 target_include_directories(ctf_server PRIVATE ${CMAKE_SOURCE_DIR}/server)
 target_link_libraries(ctf_server PRIVATE shared Threads::Threads)
