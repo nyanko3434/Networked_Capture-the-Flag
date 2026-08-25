@@ -58,6 +58,9 @@ private:
     void check_silence_timeouts();
 
     void disconnect(ClientEntry& entry, bool notify_sim);
+    void close_unregistered(int fd); // pre-join fd: never joined, or rolled
+                                     // back after JOIN_REJECT (no ClientEntry
+                                     // to hand to disconnect())
 
     // TCP frame handlers
     void on_join_lobby(int fd, const protocol::MsgJoinLobby& msg);
