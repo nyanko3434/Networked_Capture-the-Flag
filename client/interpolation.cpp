@@ -58,9 +58,7 @@ void Interpolation::push_snapshot(const WorldSnapshot& snap) {
     }
 
     ring_.push_back(snap);
-    if (ring_.size() > static_cast<size_t>(config::kSnapshotRingSize)) {
-        ring_.erase(ring_.begin());
-    }
+    // RingBuffer automatically drops oldest when full — no erase needed.
 }
 
 void Interpolation::advance(double dt_seconds) {

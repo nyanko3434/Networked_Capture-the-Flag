@@ -31,15 +31,7 @@ void Prediction::on_local_tick(const InputCmd& cmd) {
     entry.input = cmd;
     entry.state_after = local_state_; // debug HUD only (README §6.2)
     history_.push_back(entry);
-
-    // Bound the ring even though steady-state is 2-4 entries on a LAN
-    // (README §6.3) - a stalled connection must not grow this unbounded.
-    if (history_.size() > static_cast<size_t>(config::kInputHistoryRingSize)) {
-        history_.erase(history_.begin(),
-                       history_.begin() +
-                           static_cast<long>(history_.size() -
-                                             config::kInputHistoryRingSize));
-    }
+    // RingBuffer automatically drops oldest when full — no erase needed.
 }
 
 void Prediction::on_snapshot(const WorldSnapshot& snap, uint8_t my_player_id) {
@@ -83,11 +75,9 @@ void Prediction::on_snapshot(const WorldSnapshot& snap, uint8_t my_player_id) {
 
     // Drop history through the acked seq (README §6.3, desync checklist
     // item 5 - stale entries left in history re-apply old inputs on replay).
-    history_.erase(std::remove_if(history_.begin(), history_.end(),
-                                  [ack](const InputHistoryEntry& e) {
-                                      return e.seq <= ack;
-                                  }),
-                   history_.end());
+    history_.remove_if([ack](const InputHistoryEntry& e) {
+        return e.seq <= ack;
+    });
 
     // Snap to authority, then ALWAYS replay every remaining unacked entry -
     // no branch on whether a misprediction occurred (README §6.3's explicit

@@ -5,10 +5,10 @@
 // never interpolated.
 
 #include <cstdint>
-#include <vector>
 
 #include "game_types.h"
 #include "map.h"
+#include "ring_buffer.h"
 
 namespace ctf {
 
@@ -46,13 +46,13 @@ public:
     // caller responsibility (rather than Prediction owning a NetClient)
     // so this class stays networking-free and independently testable.
     uint32_t current_seq() const { return seq_; }
-    const std::vector<InputHistoryEntry>& history() const { return history_; }
+    const RingBuffer<InputHistoryEntry, config::kInputHistoryRingSize>& history() const { return history_; }
 
 private:
     uint32_t seq_ = 0;
     uint32_t last_applied_tick_ = 0;
     PlayerMotion local_state_;
-    std::vector<InputHistoryEntry> history_;
+    RingBuffer<InputHistoryEntry, config::kInputHistoryRingSize> history_;
     uint32_t mispredictions_ = 0;
     Map map_; // stateless tile grid (README §7.1) - movement_step needs one
 };
