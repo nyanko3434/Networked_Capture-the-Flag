@@ -296,6 +296,200 @@ bool decode_world_snapshot(ByteReader& r, WorldSnapshot& out) {
     return r.ok();
 }
 
+// ---------------------------------------------------------------------------
+// DELTA_SNAPSHOT (type 19)
+//
+// Wire layout (after the 8-byte UDP header):
+//   u32 last_input_seq          <- offset 0, patched per recipient
+//   u8  baseline_ticks_ago      <- baseline tick = header tick - this
+//   u8  header_mask             <- which snapshot-header fields changed
+//   [changed header fields in bit order]
+//   u16 player_change_mask      <- bit i = player slot i changed
+//   per set bit: u8 id, u8 field_mask, [only the set fields]
+//
+// All comparisons happen at wire position granularity (i16, 1/16 px) so an
+// encoder never emits a "change" the decoder cannot represent.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr uint8_t kDeltaHeaderScoreRed = 1u << 0;
+constexpr uint8_t kDeltaHeaderScoreBlue = 1u << 1;
+constexpr uint8_t kDeltaHeaderSecondsRemaining = 1u << 2;
+constexpr uint8_t kDeltaHeaderFlagRed = 1u << 3;
+constexpr uint8_t kDeltaHeaderFlagBlue = 1u << 4;
+constexpr uint8_t kDeltaHeaderPlayerCount = 1u << 5;
+constexpr uint8_t kDeltaHeaderKnownMask = 0x3F;
+
+constexpr uint8_t kDeltaFieldPos = 1u << 0;
+constexpr uint8_t kDeltaFieldAim = 1u << 1;
+constexpr uint8_t kDeltaFieldHealth = 1u << 2;
+constexpr uint8_t kDeltaFieldFlagsByte = 1u << 3;
+constexpr uint8_t kDeltaFieldKnownMask = 0x0F;
+
+bool wire_pos_eq(const Vec2Fixed& a, const Vec2Fixed& b) {
+    return (a.x >> config::kWireFixedShift) ==
+               (b.x >> config::kWireFixedShift) &&
+           (a.y >> config::kWireFixedShift) ==
+               (b.y >> config::kWireFixedShift);
+}
+
+bool player_differs(const PlayerState& a, const PlayerState& b) {
+    return a.id != b.id || !wire_pos_eq(a.motion.position, b.motion.position) ||
+           a.aim_angle != b.aim_angle || a.health != b.health ||
+           pack_player_flags(a) != pack_player_flags(b);
+}
+
+} // namespace
+
+void encode_delta_snapshot(ByteWriter& w, const WorldSnapshot& current,
+                           const WorldSnapshot& baseline) {
+    // Offset-0 ack — patched per recipient before sendto, like a full
+    // snapshot body.
+    w.u32(current.last_input_seq);
+
+    const uint32_t ago =
+        current.tick >= baseline.tick ? current.tick - baseline.tick : 0;
+    w.u8(static_cast<uint8_t>(ago > 255 ? 255 : ago));
+
+    const int n_cur = current.player_count < config::kMaxPlayers
+                          ? current.player_count
+                          : config::kMaxPlayers;
+    const int n_base = baseline.player_count < config::kMaxPlayers
+                           ? baseline.player_count
+                           : config::kMaxPlayers;
+    const bool roster_changed = current.player_count != baseline.player_count;
+
+    uint8_t header_mask = 0;
+    if (current.score_red != baseline.score_red)
+        header_mask |= kDeltaHeaderScoreRed;
+    if (current.score_blue != baseline.score_blue)
+        header_mask |= kDeltaHeaderScoreBlue;
+    if (current.seconds_remaining != baseline.seconds_remaining)
+        header_mask |= kDeltaHeaderSecondsRemaining;
+    if (current.flag_state_red != baseline.flag_state_red ||
+        current.flag_carrier_red != baseline.flag_carrier_red)
+        header_mask |= kDeltaHeaderFlagRed;
+    if (current.flag_state_blue != baseline.flag_state_blue ||
+        current.flag_carrier_blue != baseline.flag_carrier_blue)
+        header_mask |= kDeltaHeaderFlagBlue;
+    if (roster_changed) header_mask |= kDeltaHeaderPlayerCount;
+    w.u8(header_mask);
+
+    if (header_mask & kDeltaHeaderScoreRed) w.u8(current.score_red);
+    if (header_mask & kDeltaHeaderScoreBlue) w.u8(current.score_blue);
+    if (header_mask & kDeltaHeaderSecondsRemaining)
+        w.u16(current.seconds_remaining);
+    if (header_mask & kDeltaHeaderFlagRed) {
+        w.u8(static_cast<uint8_t>(current.flag_state_red));
+        w.u8(current.flag_carrier_red);
+    }
+    if (header_mask & kDeltaHeaderFlagBlue) {
+        w.u8(static_cast<uint8_t>(current.flag_state_blue));
+        w.u8(current.flag_carrier_blue);
+    }
+    if (header_mask & kDeltaHeaderPlayerCount) w.u8(current.player_count);
+
+    // A roster change invalidates every cached record: resend all slots in
+    // range fully.
+    const int n_cmp = roster_changed ? (n_cur > n_base ? n_cur : n_base) : n_cur;
+    uint16_t pchange = 0;
+    for (int i = 0; i < n_cmp; ++i) {
+        if (roster_changed || player_differs(current.players[i],
+                                             baseline.players[i])) {
+            pchange |= static_cast<uint16_t>(1u << i);
+        }
+    }
+    w.u16(pchange);
+
+    for (int i = 0; i < n_cmp; ++i) {
+        if (!(pchange & (1u << i))) continue;
+        const PlayerState& p = current.players[i];
+        w.u8(p.id);
+        uint8_t fm = 0;
+        const bool full = roster_changed;
+        if (full || !wire_pos_eq(p.motion.position,
+                                 baseline.players[i].motion.position))
+            fm |= kDeltaFieldPos;
+        if (full || p.aim_angle != baseline.players[i].aim_angle)
+            fm |= kDeltaFieldAim;
+        if (full || p.health != baseline.players[i].health)
+            fm |= kDeltaFieldHealth;
+        if (full || pack_player_flags(p) !=
+                        pack_player_flags(baseline.players[i]))
+            fm |= kDeltaFieldFlagsByte;
+        w.u8(fm);
+        if (fm & kDeltaFieldPos) write_vec2(w, p.motion.position);
+        if (fm & kDeltaFieldAim) w.u16(p.aim_angle);
+        if (fm & kDeltaFieldHealth) w.u8(p.health);
+        if (fm & kDeltaFieldFlagsByte) w.u8(pack_player_flags(p));
+    }
+}
+
+bool decode_delta_snapshot(ByteReader& r, uint32_t current_tick,
+                           WorldSnapshot& cache) {
+    // Apply onto a copy and commit only on full success, so a rejected
+    // delta leaves the client's cache usable for the next keyframe.
+    WorldSnapshot out = cache;
+
+    out.last_input_seq = r.u32();
+    const uint8_t ticks_ago = r.u8();
+    const uint8_t header_mask = r.u8();
+    if (!r.ok()) return false;
+    if ((header_mask & ~kDeltaHeaderKnownMask) != 0) return false;
+
+    // Loss detection: the baseline this delta was computed against must be
+    // exactly what the cache holds. Anything else means a datagram went
+    // missing upstream — drop until the next keyframe.
+    if (ticks_ago > current_tick) return false;
+    if (cache.tick != current_tick - ticks_ago) return false;
+
+    if (header_mask & kDeltaHeaderScoreRed) out.score_red = r.u8();
+    if (header_mask & kDeltaHeaderScoreBlue) out.score_blue = r.u8();
+    if (header_mask & kDeltaHeaderSecondsRemaining)
+        out.seconds_remaining = r.u16();
+    if (header_mask & kDeltaHeaderFlagRed) {
+        const uint8_t state_raw = r.u8();
+        out.flag_carrier_red = r.u8();
+        if (!r.ok() || !decode_flag_state(state_raw, out.flag_state_red))
+            return false;
+    }
+    if (header_mask & kDeltaHeaderFlagBlue) {
+        const uint8_t state_raw = r.u8();
+        out.flag_carrier_blue = r.u8();
+        if (!r.ok() || !decode_flag_state(state_raw, out.flag_state_blue))
+            return false;
+    }
+    if (header_mask & kDeltaHeaderPlayerCount) {
+        out.player_count = r.u8();
+        if (!r.ok() || out.player_count > config::kMaxPlayers) return false;
+    }
+
+    const uint16_t pchange = r.u16();
+    if (!r.ok()) return false;
+    // Slots are bounded by kMaxPlayers (10); bits 10..15 are protocol
+    // violations.
+    if (pchange >= (1u << config::kMaxPlayers)) return false;
+
+    for (int i = 0; i < config::kMaxPlayers; ++i) {
+        if (!(pchange & (1u << i))) continue;
+        PlayerState& p = out.players[i];
+        p.id = r.u8();
+        const uint8_t fm = r.u8();
+        if (!r.ok()) return false;
+        if ((fm & ~kDeltaFieldKnownMask) != 0) return false;
+        if (fm & kDeltaFieldPos) p.motion.position = read_vec2(r);
+        if (fm & kDeltaFieldAim) p.aim_angle = r.u16();
+        if (fm & kDeltaFieldHealth) p.health = r.u8();
+        if (fm & kDeltaFieldFlagsByte) unpack_player_flags(r.u8(), p);
+        if (!r.ok()) return false;
+    }
+
+    out.tick = current_tick;
+    cache = out;
+    return true;
+}
+
 void encode_shot_fired(ByteWriter& w, const MsgShotFired& msg) {
     w.u8(msg.shooter_id);
     write_vec2(w, msg.origin);
