@@ -307,7 +307,7 @@ header (8)  +  u32 last_input_seq            ← per-recipient
                u8  flag_state_red, flag_state_blue       (at_base/carried/dropped)
                u8  score_red, score_blue
                u16 seconds_remaining
-per player (10 bytes):
+per player (9 bytes):
                u8  id
                i16 x, i16 y
                u16 aim_angle                 (0..65535 → 0..2π)
