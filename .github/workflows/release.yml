@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -17,7 +17,8 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake git \
             libasound2-dev libx11-dev libxrandr-dev libxi-dev \
-            libxcursor-dev libxinerama-dev libgl1-mesa-dev
+            libxcursor-dev libxinerama-dev libgl1-mesa-dev \
+            libglu1-mesa-dev
 
       - name: Build
         run: |
@@ -33,7 +34,7 @@ jobs:
           cp build/ctf_client demo/dist/ctf-client-linux/
           cp build/ctf_bot demo/dist/ctf-client-linux/
 
-          cat > demo/dist/ctf-client-linux/join.sh << 'EOF'
+          cat > demo/dist/ctf-client-linux/join.sh << 'JOINSCRIPT'
           #!/usr/bin/env bash
           set -euo pipefail
           SERVER_IP="${1:-}"
@@ -45,16 +46,16 @@ jobs:
           NAME="${2:-player$(shuf -i 1-999 -n 1)}"
           echo "Joining $SERVER_IP:7777 as '$NAME'..."
           ./ctf_client --host "$SERVER_IP" --port 7777 --name "$NAME"
-          EOF
+          JOINSCRIPT
           chmod +x demo/dist/ctf-client-linux/join.sh
 
-          cat > demo/dist/ctf-client-linux/README.txt << 'EOF'
+          cat > demo/dist/ctf-client-linux/README.txt << 'READMEFILE'
           CTF Client - Quick Start
           ========================
           1. Connect to the host's WiFi hotspot
           2. Run: ./join.sh <server-ip>
           Controls: WASD=move, Mouse=aim, LeftClick=shoot, ENTER=start(host)
-          EOF
+          READMEFILE
 
           cd demo/dist
           tar czf ctf-client-linux.tar.gz ctf-client-linux/
