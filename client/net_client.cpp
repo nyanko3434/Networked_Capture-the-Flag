@@ -388,8 +388,8 @@ void NetClient::drain_udp() {
         const uint8_t* payload = buf + config::kUdpHeaderBytes;
         const size_t payload_len =
             static_cast<size_t>(n) - config::kUdpHeaderBytes;
-        dispatch_udp_payload(static_cast<protocol::MessageType>(hdr.type), payload,
-                             payload_len);
+        dispatch_udp_payload(static_cast<protocol::MessageType>(hdr.type),
+                             hdr.tick, payload, payload_len);
     }
 }
 
@@ -467,15 +467,31 @@ void NetClient::dispatch_tcp_frame(uint8_t type, const uint8_t* payload, size_t 
     }
 }
 
-void NetClient::dispatch_udp_payload(protocol::MessageType type,
+void NetClient::dispatch_udp_payload(protocol::MessageType type, uint32_t tick,
                                      const uint8_t* payload, size_t len) {
     ByteReader r(payload, len);
     switch (type) {
         case protocol::MessageType::WorldSnapshot: {
             WorldSnapshot snap;
             if (!protocol::decode_world_snapshot(r, snap) || !r.ok()) return;
+            last_snapshot_cache_ = snap;
+            have_last_snapshot_ = true;
             first_snapshot_received_ = true; // stops UDP_HELLO resends
             pending_snapshots_.push_back(snap);
+            break;
+        }
+        case protocol::MessageType::DeltaSnapshot: {
+            // Without a cached keyframe there is nothing to apply against.
+            if (!have_last_snapshot_) return;
+            if (!protocol::decode_delta_snapshot(r, tick,
+                                                 last_snapshot_cache_)) {
+                // Malformed or stale baseline (a datagram was lost
+                // upstream): drop deltas until the next keyframe.
+                have_last_snapshot_ = false;
+                return;
+            }
+            first_snapshot_received_ = true;
+            pending_snapshots_.push_back(last_snapshot_cache_);
             break;
         }
         case protocol::MessageType::ShotFired: {

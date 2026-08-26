@@ -223,6 +223,44 @@ struct FakePeer {
         std::memcpy(dgram.data() + config::kUdpHeaderBytes, body.data(), body.size());
         return dgram;
     }
+
+    // Builds any WORLD_SNAPSHOT as a full keyframe datagram.
+    std::vector<uint8_t> build_full_datagram(const WorldSnapshot& snap) {
+        std::vector<uint8_t> body(512);
+        ByteWriter bw(body.data(), body.size());
+        encode_world_snapshot(bw, snap);
+        body.resize(bw.size());
+
+        std::vector<uint8_t> dgram(config::kUdpHeaderBytes + body.size());
+        ByteWriter hw(dgram.data(), dgram.size());
+        encode_udp_header(hw, UdpHeader{kMagic, kProtocolVersion,
+                                        static_cast<uint8_t>(
+                                            MessageType::WorldSnapshot),
+                                        snap.tick});
+        std::memcpy(dgram.data() + config::kUdpHeaderBytes, body.data(),
+                    body.size());
+        return dgram;
+    }
+
+    // Builds a DELTA_SNAPSHOT of `cur` against `base`; the transport
+    // header carries `cur.tick`.
+    std::vector<uint8_t> build_delta_datagram(const WorldSnapshot& base,
+                                              const WorldSnapshot& cur) {
+        std::vector<uint8_t> body(512);
+        ByteWriter bw(body.data(), body.size());
+        encode_delta_snapshot(bw, cur, base);
+        body.resize(bw.size());
+
+        std::vector<uint8_t> dgram(config::kUdpHeaderBytes + body.size());
+        ByteWriter hw(dgram.data(), dgram.size());
+        encode_udp_header(hw, UdpHeader{kMagic, kProtocolVersion,
+                                        static_cast<uint8_t>(
+                                            MessageType::DeltaSnapshot),
+                                        cur.tick});
+        std::memcpy(dgram.data() + config::kUdpHeaderBytes, body.data(),
+                    body.size());
+        return dgram;
+    }
 };
 
 } // namespace
@@ -623,4 +661,166 @@ TEST_CASE("net_client: a malformed UDP datagram (bad magic) is dropped "
     auto snaps = client.take_snapshots();
     REQUIRE(snaps.size() == 1);
     CHECK(snaps[0].tick == 7);
+}
+
+// ---------------------------------------------------------------------------
+// DELTA_SNAPSHOT handling: reconstruct onto the cached keyframe, drop on
+// loss, recover at the next keyframe (README §5.5 delta extension).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+WorldSnapshot one_player_snap(uint32_t tick, int32_t x) {
+    WorldSnapshot s;
+    s.tick = tick;
+    s.player_count = 1;
+    s.players[0].id = 2;
+    s.players[0].team = Team::Red;
+    // Wire-aligned position (multiple of 16).
+    s.players[0].motion.position = Vec2Fixed{x, 32000};
+    s.players[0].aim_angle = 1000;
+    s.players[0].health = 100;
+    s.players[0].alive = true;
+    return s;
+}
+
+} // namespace
+
+TEST_CASE("net_client: DELTA_SNAPSHOTs reconstruct against the cached "
+         "keyframe and surface as normal snapshots") {
+    FakePeer peer;
+    NetClient client;
+    std::thread accept_thread([&] {
+        REQUIRE(peer.accept_client(2000));
+        uint8_t type = 0;
+        std::vector<uint8_t> payload;
+        REQUIRE(peer.recv_tcp_frame(2000, type, payload));
+        peer.reply_join_accept(2, 0xD1u);
+    });
+    REQUIRE(client.connect_and_join("127.0.0.1", peer.tcp_port, "smoke", 2000));
+    accept_thread.join();
+
+    std::vector<uint8_t> dgram;
+    sockaddr_in from{};
+    REQUIRE(poll_until(
+        [&] {
+            client.poll();
+            return peer.recv_udp(5, dgram, from);
+        },
+        1000, 0));
+
+    const WorldSnapshot base = one_player_snap(/*tick=*/100, /*x=*/160000);
+    WorldSnapshot cur = base;
+    cur.tick = 101;
+    cur.players[0].motion.position.x += 160; // moved 10 px
+    cur.score_red = 1;
+
+    peer.send_udp(peer.build_full_datagram(base).data(),
+                  peer.build_full_datagram(base).size(), from);
+    std::vector<WorldSnapshot> kf_snaps;
+    REQUIRE(poll_until([&] {
+        client.poll();
+        kf_snaps = client.take_snapshots();
+        return !kf_snaps.empty();
+    }, 1000, 5));
+    CHECK(kf_snaps.size() == 1);
+    CHECK(kf_snaps[0].tick == 100);
+
+    auto delta = peer.build_delta_datagram(base, cur);
+    peer.send_udp(delta.data(), delta.size(), from);
+    std::vector<WorldSnapshot> snaps;
+    REQUIRE(poll_until([&] {
+        client.poll();
+        snaps = client.take_snapshots();
+        return !snaps.empty();
+    }, 1000, 5));
+
+    REQUIRE(snaps.size() == 1);
+    CHECK(snaps[0].tick == 101);
+    CHECK(snaps[0].score_red == 1);
+    CHECK(snaps[0].players[0].motion.position.x ==
+          cur.players[0].motion.position.x);
+}
+
+TEST_CASE("net_client: a lost delta stalls updates until the next keyframe "
+         "recovers the stream") {
+    FakePeer peer;
+    NetClient client;
+    std::thread accept_thread([&] {
+        REQUIRE(peer.accept_client(2000));
+        uint8_t type = 0;
+        std::vector<uint8_t> payload;
+        REQUIRE(peer.recv_tcp_frame(2000, type, payload));
+        peer.reply_join_accept(1, 0xD2u);
+    });
+    REQUIRE(client.connect_and_join("127.0.0.1", peer.tcp_port, "smoke", 2000));
+    accept_thread.join();
+
+    std::vector<uint8_t> dgram;
+    sockaddr_in from{};
+    REQUIRE(poll_until(
+        [&] {
+            client.poll();
+            return peer.recv_udp(5, dgram, from);
+        },
+        1000, 0));
+
+    const WorldSnapshot base = one_player_snap(200, 160000);
+
+    peer.send_udp(peer.build_full_datagram(base).data(),
+                  peer.build_full_datagram(base).size(), from);
+    std::vector<WorldSnapshot> kf_snaps;
+    REQUIRE(poll_until([&] {
+        client.poll();
+        kf_snaps = client.take_snapshots();
+        return !kf_snaps.empty();
+    }, 1000, 5));
+    CHECK(kf_snaps[0].tick == 200);
+
+    // tick=201's delta is "lost" — never sent. The tick=202 delta (built
+    // against the missing 201 state) is unappliable and must be dropped.
+    WorldSnapshot s201 = base;
+    s201.tick = 201;
+    s201.players[0].motion.position.x += 160;
+    WorldSnapshot s202 = s201;
+    s202.tick = 202;
+    s202.players[0].motion.position.x += 160;
+
+    auto orphan = peer.build_delta_datagram(s201, s202);
+    peer.send_udp(orphan.data(), orphan.size(), from);
+    // Give the client time to process; no snapshot may surface.
+    for (int i = 0; i < 20; ++i) {
+        client.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(client.take_snapshots().empty());
+
+    // The next full keyframe recovers the stream.
+    WorldSnapshot kf = one_player_snap(203, 160992);
+    peer.send_udp(peer.build_full_datagram(kf).data(),
+                  peer.build_full_datagram(kf).size(), from);
+    std::vector<WorldSnapshot> snaps;
+    REQUIRE(poll_until([&] {
+        client.poll();
+        snaps = client.take_snapshots();
+        return !snaps.empty();
+    }, 1000, 5));
+
+    REQUIRE(snaps.size() == 1);
+    CHECK(snaps[0].tick == 203);
+    CHECK(snaps[0].players[0].motion.position.x == 160992);
+
+    // And deltas flow again afterwards.
+    WorldSnapshot s204 = kf;
+    s204.tick = 204;
+    s204.players[0].motion.position.x += 160;
+    auto delta204 = peer.build_delta_datagram(kf, s204);
+    peer.send_udp(delta204.data(), delta204.size(), from);
+    std::vector<WorldSnapshot> snaps204;
+    REQUIRE(poll_until([&] {
+        client.poll();
+        snaps204 = client.take_snapshots();
+        return !snaps204.empty();
+    }, 1000, 5));
+    CHECK(snaps204[0].tick == 204);
 }
