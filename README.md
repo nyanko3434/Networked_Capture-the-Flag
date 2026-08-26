@@ -323,6 +323,37 @@ told which of *its own* inputs was last applied, so the snapshot is not one
 identical buffer. Serialize the body once per tick, then patch those 4 bytes per
 recipient before each `sendto`.
 
+#### Delta snapshots (post-course extension)
+
+Bandwidth optimization: most ticks change only a few players. With
+`--snapshots delta` (the default), the server publishes a full
+`WORLD_SNAPSHOT` **keyframe** every 10th snapshot and a `DELTA_SNAPSHOT`
+(type 19) in between. The delta carries field-level diffs against the
+*previous publish*:
+
+```
+u32 last_input_seq      <- offset 0, patched per recipient (same as full)
+u8  baseline_ticks_ago  <- baseline = header tick - this (usually 1)
+u8  header_mask         <- scores / seconds / flag fields present below
+[changed header fields]
+u16 player_change_mask  <- bit i = player slot i changed
+per changed player: u8 id, u8 field_mask (pos/aim/health/flags), [set fields]
+```
+
+- The client caches its last applied snapshot; a delta is decoded onto that
+  cache. Positions compare at wire granularity (i16, 1/16 px), so an encoder
+  never emits a "change" the decoder cannot represent.
+- **Loss handling without ACKs:** if a datagram is lost, later deltas
+  reference a baseline the client does not hold. The decoder detects the tick
+  mismatch, rejects them, and the stream stalls until the next keyframe — at
+  most `kSnapshotKeyframeInterval` snapshot intervals (~333 ms at 30 Hz).
+  No NACK channel; UDP stays fire-and-forget.
+- The protocol version bumped to 2 so stale v1 binaries get a clean
+  `JOIN_REJECT BadVersion` instead of mis-decoding type 19.
+- Measured numbers live in `docs/benchmark_snapshots.md`
+  (`tools/bench_bandwidth.sh`); the optimization write-up itself is
+  `docs/optimization.md`.
+
 ### 5.6 Connection handshake
 
 ```
@@ -716,8 +747,10 @@ Recorded so the report can explain them rather than quietly dropping them.
 | C++ generally | C++17, C-style POSIX APIs | Course focus is the raw syscall layer |
 | "select/poll/epoll" | `poll` then `epoll`, both measured | Turns an assertion into a measured comparison |
 
-Items deferred to future work: lag compensation, delta-compressed snapshots,
-mid-match join, projectiles and pickups, internet play.
+Items deferred to future work: lag compensation, mid-match join, projectiles
+and pickups, internet play. Delta-compressed snapshots — also on the deferred
+list — have since been implemented (see §5.5 "Delta snapshots"), along with a
+bandwidth benchmark harness (`tools/bench_bandwidth.sh`).
 
 ---
 

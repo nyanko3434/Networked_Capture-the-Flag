@@ -116,6 +116,7 @@ Useful server flags:
 | `--port N` | TCP listen port |
 | `--tick N` | simulation tick rate (default 30) |
 | `--snapshot-rate N` | UDP snapshots per second (lower = choppier demo) |
+| `--snapshots delta\|full` | delta-compressed snapshots (default `delta`; `full` = legacy behavior) |
 | `--poller poll\|epoll` | I/O multiplexer backend |
 
 Startup prints `listening tcp=7777 udp=NNNNN` — the UDP port is ephemeral;
@@ -151,6 +152,9 @@ LAN play: replace `127.0.0.1` with the server machine's LAN IP
 | `tools/loadgen.py` | headless Python reference client — protocol smoke test without building anything |
 | `tools/netem.sh on [--delay MS] [--loss PCT]` | simulate bad network on loopback (needs root); `off` to remove |
 | `tools/bench_pollers.sh` | poll-vs-epoll benchmark → `docs/benchmark.md` |
+| `tools/bench_bandwidth.sh` | full-vs-delta snapshot bandwidth benchmark → `docs/benchmark_snapshots.md` |
+
+For what was optimized and why, read `docs/optimization.md`.
 
 Example adverse-network session:
 
