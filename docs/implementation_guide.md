@@ -89,7 +89,7 @@ Acceptance criteria:
 Checklist:
 - [ ] `PlayerState`: id, position (`i16 x, y` wire form / `int32` internal form
       per §5.1), aim_angle (`u16`), health (`u8`), flags bitfield (alive |
-      carrying | team | firing) per §5.5's per-player 10-byte layout.
+      carrying | team | firing) per §5.5's per-player 9-byte layout.
 - [ ] `FlagState`: team, state enum (`at_base` / `carried` / `dropped`), position
       (used only when dropped).
 - [ ] `WorldSnapshot`: header fields exactly as listed in §5.5 (last_input_seq,

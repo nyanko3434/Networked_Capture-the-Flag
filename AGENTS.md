@@ -174,3 +174,25 @@ Session notes (2026-08-26, network optimization — delta snapshots):
 - New tools/bench_bandwidth.sh -> docs/benchmark_snapshots.md:
   full 3.42 vs delta 1.85 KiB/s/client at n=10 (~46% reduction; scales
   with idle time — constant motion is the pathological worst case ~15%).
+
+Session notes (2026-08-26, bot navigation — flow fields):
+- ctf_bot no longer sticks on walls. Old memoryless greedy step-steering
+  oscillated at obstacles; replaced with precomputed BFS flow fields
+  (bot/flow_field.{h,cpp}): descend strictly downhill, per-axis physical
+  feasibility probes, active corridor re-centering (off-center boxes
+  clipping wall-gap corners was the wedge root cause).
+- BotAI extracted from bot/main.cpp into bot/bot_ai.{h,cpp} as the
+  raylib-free `bot_core` static lib (built unconditionally so tests run
+  with CTF_BUILD_CLIENT=OFF). Target selection: carry->home, enemy raider
+  has our flag->hunt carrier, else->enemy base. Wire format carries no
+  dropped-flag position, so chasing dropped enemy flags is not derivable.
+- New tests/test_bot_ai.cpp: BFS descent property, full-sim navigation
+  from every spawn to the enemy base via shared movement_step, flag-carry
+  run home, raider hunt, seed determinism. Suite now 141 cases /
+  18,444 assertions, green normal + ASan (/tmp/opencode/ctf-asan2).
+- Docs: docs/optimization.md §3 documents the navigation design; HANDOFF
+  and README snapshot layout corrected 10->9 bytes per player.
+- Root .md reorganization: README/implementation_guide/manual/HANDOFF
+  moved to docs/ (git mv), new landing README.md at root, AGENTS.md stays
+  at root by convention. Committed directly on dev (304536c) before this
+  branch existed — see history.

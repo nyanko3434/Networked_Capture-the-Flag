@@ -64,6 +64,16 @@ add_library(shared STATIC
 )
 target_include_directories(shared PUBLIC ${CMAKE_SOURCE_DIR}/shared)
 
+# --- bot_core: raylib-free bot AI + flow-field navigation. Built
+# unconditionally so the test suite can exercise it on server-only
+# machines (no raylib dependency). ---
+add_library(bot_core STATIC
+    bot/flow_field.cpp
+    bot/bot_ai.cpp
+)
+target_include_directories(bot_core PUBLIC ${CMAKE_SOURCE_DIR}/bot)
+target_link_libraries(bot_core PUBLIC shared)
+
 # --- ctf_server ---
 add_executable(ctf_server
     server/main.cpp
@@ -98,11 +108,11 @@ add_executable(ctf_client
 )
 target_link_libraries(ctf_client PRIVATE client_core shared Threads::Threads raylib)
 
-# --- ctf_bot: headless client, reuses client_core, no raylib. ---
+# --- ctf_bot: headless client, reuses client_core + bot_core, no raylib. ---
 add_executable(ctf_bot
     bot/main.cpp
 )
-target_link_libraries(ctf_bot PRIVATE client_core shared Threads::Threads)
+target_link_libraries(ctf_bot PRIVATE client_core bot_core shared Threads::Threads)
 endif()
 
 enable_testing()

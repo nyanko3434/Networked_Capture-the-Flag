@@ -80,7 +80,7 @@ WORLD_SNAPSHOT  u32 last_input_seq          <- PATCHED PER RECIPIENT (offset 0!)
                 u8 flag_state_red, flag_state_blue            (0=base,1=carried,2=dropped)
                 u8 score_red, score_blue
                 u16 seconds_remaining
-                per player (10 bytes):
+                per player (9 bytes):
                   u8 id, i16 x, i16 y, u16 aim_angle, u8 health, u8 flags
                   flags bits: 1=alive, 2=carrying_flag, 4=team_blue, 8=firing
 SHOT_FIRED      u8 shooter_id, i16 ox, i16 oy, u16 angle, i16 hx, i16 hy

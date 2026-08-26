@@ -109,8 +109,68 @@ change-mask approach gets the bandwidth win without any risk of missing
 state.
 
 ---
+## 3. Bot flow-field navigation
 
-## 3. Measurement harness + load-generator fixes
+### The problem
+
+`ctf_bot`'s original movement AI was a memoryless greedy step: each tick it
+probed the 4 cardinal + 1 diagonal single-step moves and kept whichever
+landed closest to its target without overlapping a wall. In front of the
+map's obstacles (the row-8/16 walls with narrow gaps, the pillar blocks)
+this dead-ends: "step away" is best at position A, "step back" is best at
+B, and the bot oscillates forever — visibly stuck against a wall.
+
+### The change
+
+The tile grid is static (40×25), so the bot now precomputes a **BFS flow
+field** per base at startup (`bot/flow_field.{h,cpp}`):
+`dist[tile] = fewest tile steps from the source through non-wall tiles`.
+Navigation is gradient descent:
+
+- Every chosen move must be **field-descending** (neighbor distance
+  strictly smaller) *and* **physically feasible** (a real AABB probe of the
+  actual next step must be collision-free).
+- While travelling, the bot actively re-centers its 24px box in the middle
+  of its corridor. An off-center box clips wall-gap corners — the root
+  cause of wedge-sticking.
+- If wedged anyway (every descending axis blocked right now), the bot
+  wiggles toward its current tile's center until descent resumes.
+
+Walking strictly downhill cannot oscillate or dead-end: there is always a
+next step with a smaller distance until the source is reached.
+
+### Target selection
+
+| Situation | Behavior |
+|---|---|
+| Carrying a flag | flow field to our own base |
+| Our flag carried by an enemy | direct chase of that carrier (killing them drops it) |
+| Otherwise | flow field to the enemy base (steal; a dropped enemy flag auto-returns home) |
+
+Note: the wire format carries flag *state* and *carrier* but never a
+dropped-flag position, so "chase the dropped enemy flag" is not derivable
+from snapshots — pushing to its home base is the correct play given the
+450-tick auto-return.
+
+### Structure & tests
+
+`BotAI` moved from an untestable block in `bot/main.cpp` into
+`bot/bot_ai.{h,cpp}` (built as the raylib-free `bot_core` library so tests
+run on server-only machines). New `tests/test_bot_ai.cpp` covers:
+
+- BFS descent property: every reachable tile has a neighbor exactly one
+  step closer (navigation can never dead-end).
+- Full simulation: from **every** spawn point, `BotAI.tick()` +
+  shared `movement_step` reaches the enemy base within 1800 ticks —
+  end-to-end proof of no-stuck through the real collision code.
+- Flag-carry run home; hunting an enemy raider; seed determinism.
+
+Live verification: server + 9 bots + observer client for ~20 s → all 9
+bots roam (>100 px displacement), combat events flowing.
+
+---
+
+## 4. Measurement harness + load-generator fixes
 
 New `tools/bench_bandwidth.sh` (modeled on `bench_pollers.sh`) records
 full-vs-delta numbers into `docs/benchmark_snapshots.md`. Writing it
@@ -139,7 +199,7 @@ buffer overread, not a server bug.
 
 ## Verification
 
-- **135 test cases / 16,411 assertions green**, normal build and ASan build.
+- **141 test cases / 18,444 assertions green**, normal build and ASan build.
 - New tests: delta round-trips, empty-delta minimality, patch-offset
   preservation, stale-baseline rejection, malformed/truncated fuzzing,
   keyframe cadence, full-mode purity, end-to-end loss-and-recovery over

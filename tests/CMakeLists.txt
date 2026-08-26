@@ -19,6 +19,7 @@ set(CTF_TEST_SOURCES
     test_prediction.cpp
     test_interpolation.cpp
     test_render_policy.cpp
+    test_bot_ai.cpp
 )
 
 # Server modules under test, added explicitly as their tests land.
@@ -48,7 +49,8 @@ target_include_directories(ctf_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/server
     ${CMAKE_SOURCE_DIR}/client
+    ${CMAKE_SOURCE_DIR}/bot
 )
-target_link_libraries(ctf_tests PRIVATE shared Threads::Threads)
+target_link_libraries(ctf_tests PRIVATE shared bot_core Threads::Threads)
 
 add_test(NAME ctf_tests COMMAND ctf_tests)
