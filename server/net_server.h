@@ -43,6 +43,9 @@ public:
     // --- test/main accessors ---
     ClientRegistry& registry() { return registry_; }
     uint64_t udp_snapshots_sent() const { return udp_snapshots_sent_; }
+    uint64_t udp_delta_snapshots_sent() const {
+        return udp_delta_snapshots_sent_;
+    }
     uint64_t tcp_events_fanned_out() const { return tcp_events_fanned_out_; }
     uint16_t local_port() const { return local_port_; }
     uint16_t udp_port() const { return udp_port_; }
@@ -105,6 +108,7 @@ private:
 
     uint32_t last_silence_check_ms_ = 0;
     uint64_t udp_snapshots_sent_ = 0;
+    uint64_t udp_delta_snapshots_sent_ = 0;
     uint64_t tcp_events_fanned_out_ = 0;
 };
 

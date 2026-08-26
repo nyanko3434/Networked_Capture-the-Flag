@@ -84,7 +84,12 @@ struct Fixture {
     const OutboundEvent* last_snapshot(const std::vector<OutboundEvent>& e) {
         const OutboundEvent* found = nullptr;
         for (const auto& ev : e) {
-            if (ev.type == OutboundEventType::UdpSnapshot) found = &ev;
+            // Both publish types carry the same per-recipient ack table;
+            // delta mode makes most publishes DELTA_SNAPSHOTs.
+            if (ev.type == OutboundEventType::UdpSnapshot ||
+                ev.type == OutboundEventType::UdpDeltaSnapshot) {
+                found = &ev;
+            }
         }
         return found;
     }
@@ -616,4 +621,130 @@ TEST_CASE("three captures fire MATCH_END and freeze gameplay") {
         f.drain_out();
     }
     CHECK(f.snap_player(1)->motion.position.x == frozen_x);
+}
+
+// ---------------------------------------------------------------------------
+// delta snapshot publishing (--snapshots delta, README §5.5 extension)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Wire-granularity equality between a decoded snapshot (cache or full) and
+// the authoritative in-sim snapshot. Positions compare at i16/1-16px wire
+// precision; last_input_seq is excluded (it is patched per recipient).
+void check_matches_authority(const WorldSnapshot& got,
+                             const WorldSnapshot& auth) {
+    CHECK(got.tick == auth.tick);
+    CHECK(got.player_count == auth.player_count);
+    CHECK(got.flag_carrier_red == auth.flag_carrier_red);
+    CHECK(got.flag_carrier_blue == auth.flag_carrier_blue);
+    CHECK(got.flag_state_red == auth.flag_state_red);
+    CHECK(got.flag_state_blue == auth.flag_state_blue);
+    CHECK(got.score_red == auth.score_red);
+    CHECK(got.score_blue == auth.score_blue);
+    CHECK(got.seconds_remaining == auth.seconds_remaining);
+    for (int i = 0; i < config::kMaxPlayers; ++i) {
+        const auto shift = config::kWireFixedShift;
+        CHECK(got.players[i].id == auth.players[i].id);
+        CHECK(got.players[i].motion.position.x ==
+              ((auth.players[i].motion.position.x >> shift) << shift));
+        CHECK(got.players[i].motion.position.y ==
+              ((auth.players[i].motion.position.y >> shift) << shift));
+        CHECK(got.players[i].aim_angle == auth.players[i].aim_angle);
+        CHECK(got.players[i].health == auth.players[i].health);
+        CHECK(got.players[i].alive == auth.players[i].alive);
+        CHECK(got.players[i].carrying_flag == auth.players[i].carrying_flag);
+        CHECK(got.players[i].team == auth.players[i].team);
+    }
+}
+
+} // namespace
+
+TEST_CASE("delta mode: first publish is a keyframe, then every 10th") {
+    Fixture f;
+    f.sim.set_delta_snapshots(true);
+    two_player_setup(f); // its tick emits publish #0 - the initial keyframe
+
+    std::vector<OutboundEvent> publishes;
+    for (int t = 0; t < 25; ++t) {
+        f.input(1, t + 1, kInputRight, static_cast<uint16_t>(t * 100));
+        f.input(2, t + 1, kInputLeft, 0);
+        f.sim.tick();
+        for (auto& ev : f.drain_out()) {
+            if (ev.type == OutboundEventType::UdpSnapshot ||
+                ev.type == OutboundEventType::UdpDeltaSnapshot) {
+                publishes.push_back(ev);
+            }
+        }
+    }
+
+    REQUIRE(publishes.size() == 25);
+    // Publishes collected here are #1..#25, so the recurring keyframes sit
+    // at #10 and #20 -> indexes 9 and 19.
+    std::vector<size_t> key_indices;
+    for (size_t i = 0; i < publishes.size(); ++i) {
+        if (publishes[i].type == OutboundEventType::UdpSnapshot) {
+            key_indices.push_back(i);
+        }
+    }
+    REQUIRE(key_indices.size() == 2);
+    CHECK(key_indices[0] ==
+          static_cast<size_t>(config::kSnapshotKeyframeInterval) - 1);
+    CHECK(key_indices[1] ==
+          2 * static_cast<size_t>(config::kSnapshotKeyframeInterval) - 1);
+}
+
+TEST_CASE("delta snapshots reconstruct the authoritative state exactly") {
+    Fixture f;
+    f.sim.set_delta_snapshots(true);
+    two_player_setup(f);
+
+    WorldSnapshot cache = f.sim.snapshot(); // publish #0 (the setup keyframe)
+    REQUIRE(cache.tick == 0);
+    uint32_t seq = 0;
+    int deltas_applied = 0;
+
+    for (int t = 0; t < 40; ++t) {
+        f.input(1, ++seq, (t % 7) ? kInputRight : 0u,
+                static_cast<uint16_t>(t * 2000));
+        if (t % 3 == 0) f.input(2, ++seq, kInputLeft, 30000);
+        f.sim.tick();
+        const WorldSnapshot auth = f.sim.snapshot();
+        REQUIRE(auth.player_count == 2);
+
+        for (auto& ev : f.drain_out()) {
+            if (ev.type != OutboundEventType::UdpSnapshot &&
+                ev.type != OutboundEventType::UdpDeltaSnapshot)
+                continue;
+            ByteReader r(ev.payload_ptr(), ev.payload_len());
+            if (ev.type == OutboundEventType::UdpSnapshot) {
+                WorldSnapshot full;
+                REQUIRE(decode_world_snapshot(r, full));
+                cache = full;
+            } else {
+                REQUIRE(decode_delta_snapshot(r, ev.tick, cache));
+                ++deltas_applied;
+            }
+            REQUIRE(r.ok());
+            check_matches_authority(cache, auth);
+        }
+    }
+    // Sanity: the run actually exercised the delta path.
+    CHECK(deltas_applied > 20);
+}
+
+TEST_CASE("full snapshot mode never emits delta publishes") {
+    Fixture f;
+    f.sim.set_delta_snapshots(false);
+    two_player_setup(f);
+
+    for (int t = 0; t < 15; ++t) {
+        f.input(1, t + 1, kInputRight);
+        f.sim.tick();
+        for (auto& ev : f.drain_out()) {
+            if (ev.type == OutboundEventType::UdpDeltaSnapshot) {
+                CHECK_FALSE("delta publish leaked into full mode");
+            }
+        }
+    }
 }

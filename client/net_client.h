@@ -125,8 +125,10 @@ private:
     void drain_tcp();
     void drain_udp();
     void dispatch_tcp_frame(uint8_t type, const uint8_t* payload, size_t len);
-    void dispatch_udp_payload(protocol::MessageType type, const uint8_t* payload,
-                              size_t len);
+    // `tick` is the transport-header tick (README §5.3) — DELTA_SNAPSHOTs
+    // need it because the delta body itself carries no tick field.
+    void dispatch_udp_payload(protocol::MessageType type, uint32_t tick,
+                              const uint8_t* payload, size_t len);
     void send_tcp_frame(protocol::MessageType type, const uint8_t* payload,
                         size_t len);
     void maybe_resend_udp_hello();
@@ -146,6 +148,12 @@ private:
     protocol::MsgGameStart game_start_;
 
     bool first_snapshot_received_ = false;
+    // Cache of the last applied snapshot (full or reconstructed delta).
+    // DELTA_SNAPSHOTs are decoded against it; on a baseline mismatch
+    // (packet loss) the cache is invalidated and updates stall until the
+    // next full keyframe.
+    WorldSnapshot last_snapshot_cache_{};
+    bool have_last_snapshot_ = false;
     uint32_t last_udp_hello_sent_ms_ = 0;
     uint32_t last_heartbeat_sent_ms_ = 0;
 

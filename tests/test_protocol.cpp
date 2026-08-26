@@ -31,7 +31,9 @@ WorldSnapshot sample_snapshot() {
     PlayerState& a = s.players[0];
     a.id = 1;
     a.team = Team::Red;
-    a.motion.position = Vec2Fixed{123456, 234567}; // inside the map
+    // Positions must be wire-aligned (multiples of 16) so delta round-trips
+    // can compare exactly.
+    a.motion.position = Vec2Fixed{123456, 234560}; // inside the map
     a.aim_angle = 65000;
     a.health = 66;
     a.alive = true;
@@ -40,7 +42,7 @@ WorldSnapshot sample_snapshot() {
     PlayerState& b = s.players[1];
     b.id = 2;
     b.team = Team::Blue;
-    b.motion.position = Vec2Fixed{100000, 99999};
+    b.motion.position = Vec2Fixed{100000, 99984};
     b.aim_angle = 500;
     b.health = 34;
     b.alive = false;
@@ -453,6 +455,287 @@ TEST_CASE("control-plane messages round-trip") {
                 CHECK(a.score_red == b.score_red);
                 CHECK(a.score_blue == b.score_blue);
             });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DELTA_SNAPSHOT (type 19) — delta-compressed snapshots (README §5.5 delta
+// extension). Payload starts with the per-recipient last_input_seq at offset
+// 0, exactly like WORLD_SNAPSHOT, so broadcast.cpp's 4-byte patch works on
+// both. Baseline is the previous published snapshot; a lost datagram makes
+// later deltas unappliable and the decoder rejects them until the next
+// keyframe.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Projects a snapshot down to wire position granularity (i16, 1/16 px) so
+// reconstructed deltas can be compared exactly.
+WorldSnapshot wire_granularity(WorldSnapshot s) {
+    for (int i = 0; i < config::kMaxPlayers; ++i) {
+        s.players[i].motion.position.x =
+            (s.players[i].motion.position.x >> config::kWireFixedShift)
+            << config::kWireFixedShift;
+        s.players[i].motion.position.y =
+            (s.players[i].motion.position.y >> config::kWireFixedShift)
+            << config::kWireFixedShift;
+    }
+    return s;
+}
+
+void check_snap_eq(const WorldSnapshot& exp, const WorldSnapshot& got) {
+    CHECK(got.tick == exp.tick);
+    CHECK(got.player_count == exp.player_count);
+    CHECK(got.flag_carrier_red == exp.flag_carrier_red);
+    CHECK(got.flag_carrier_blue == exp.flag_carrier_blue);
+    CHECK(got.flag_state_red == exp.flag_state_red);
+    CHECK(got.flag_state_blue == exp.flag_state_blue);
+    CHECK(got.score_red == exp.score_red);
+    CHECK(got.score_blue == exp.score_blue);
+    CHECK(got.seconds_remaining == exp.seconds_remaining);
+    for (int i = 0; i < config::kMaxPlayers; ++i) {
+        INFO("player slot ", i);
+        CHECK(got.players[i].id == exp.players[i].id);
+        CHECK(got.players[i].motion.position.x ==
+              exp.players[i].motion.position.x);
+        CHECK(got.players[i].motion.position.y ==
+              exp.players[i].motion.position.y);
+        CHECK(got.players[i].aim_angle == exp.players[i].aim_angle);
+        CHECK(got.players[i].health == exp.players[i].health);
+        CHECK(got.players[i].alive == exp.players[i].alive);
+        CHECK(got.players[i].carrying_flag == exp.players[i].carrying_flag);
+        CHECK(got.players[i].team == exp.players[i].team);
+        CHECK(got.players[i].firing == exp.players[i].firing);
+    }
+}
+
+} // namespace
+
+TEST_CASE("protocol version bumped to 2 for DELTA_SNAPSHOT") {
+    CHECK(kProtocolVersion == 2);
+    CHECK(static_cast<uint8_t>(MessageType::DeltaSnapshot) == 19);
+}
+
+TEST_CASE("DELTA_SNAPSHOT round-trip reconstructs the current snapshot") {
+    const WorldSnapshot base = sample_snapshot(); // tick 123456
+    WorldSnapshot cur = base;
+    cur.tick = base.tick + 1;
+
+    std::vector<uint8_t> buf(512);
+    ByteWriter w(buf.data(), buf.size());
+    encode_delta_snapshot(w, cur, base);
+    REQUIRE(w.ok());
+
+    WorldSnapshot cache = base;
+    ByteReader r(buf.data(), w.size());
+    REQUIRE(decode_delta_snapshot(r, static_cast<uint32_t>(cur.tick), cache));
+    check_snap_eq(wire_granularity(cur), cache);
+}
+
+TEST_CASE("unchanged snapshot produces a minimal empty delta") {
+    const WorldSnapshot base = sample_snapshot();
+    WorldSnapshot cur = base;
+    cur.tick = base.tick + 1;
+
+    std::vector<uint8_t> buf(512);
+    ByteWriter w(buf.data(), buf.size());
+    encode_delta_snapshot(w, cur, base);
+    REQUIRE(w.ok());
+
+    // u32 ack + u8 ticks_ago + u8 header_mask + u16 player mask, no fields.
+    CHECK(w.size() == 8);
+
+    WorldSnapshot cache = base;
+    ByteReader r(buf.data(), w.size());
+    REQUIRE(decode_delta_snapshot(r, static_cast<uint32_t>(cur.tick), cache));
+    check_snap_eq(wire_granularity(cur), cache);
+}
+
+TEST_CASE("delta encodes only changed fields per player") {
+    const WorldSnapshot base = sample_snapshot();
+    WorldSnapshot cur = base;
+    cur.tick = base.tick + 3;
+    cur.score_blue = 9;                       // header field change
+    cur.seconds_remaining = 42;               // header field change
+    cur.players[0].motion.position.x += 1600; // moved 100 px
+    cur.players[1].health = 33;               // health-only change
+
+    std::vector<uint8_t> buf(512);
+    ByteWriter w(buf.data(), buf.size());
+    encode_delta_snapshot(w, cur, base);
+    REQUIRE(w.size() < 64); // far below the ~40-byte full body
+    // baseline_ticks_ago reflects the tick gap.
+    CHECK(buf[4] == 3);
+
+    WorldSnapshot cache = base;
+    ByteReader r(buf.data(), w.size());
+    REQUIRE(decode_delta_snapshot(r, static_cast<uint32_t>(cur.tick), cache));
+    check_snap_eq(wire_granularity(cur), cache);
+}
+
+TEST_CASE("delta payload keeps last_input_seq patchable at offset 0") {
+    const WorldSnapshot base = sample_snapshot();
+    WorldSnapshot cur = base;
+    cur.tick = base.tick + 1;
+    cur.players[0].motion.position.y += 320;
+
+    std::vector<uint8_t> buf(512);
+    ByteWriter w(buf.data(), buf.size());
+    encode_delta_snapshot(w, cur, base);
+    const size_t body_len = w.size();
+
+    std::vector<uint8_t> for_a(buf.begin(), buf.begin() + body_len);
+    std::vector<uint8_t> for_b(buf.begin(), buf.begin() + body_len);
+    const uint32_t seq_a = 5;
+    const uint32_t seq_b = 987654;
+    for_a[0] = static_cast<uint8_t>(seq_a >> 24);
+    for_a[1] = static_cast<uint8_t>(seq_a >> 16);
+    for_a[2] = static_cast<uint8_t>(seq_a >> 8);
+    for_a[3] = static_cast<uint8_t>(seq_a);
+    for_b[0] = static_cast<uint8_t>(seq_b >> 24);
+    for_b[1] = static_cast<uint8_t>(seq_b >> 16);
+    for_b[2] = static_cast<uint8_t>(seq_b >> 8);
+    for_b[3] = static_cast<uint8_t>(seq_b);
+
+    size_t diff_bytes = 0;
+    for (size_t i = 0; i < body_len; ++i) {
+        if (for_a[i] != for_b[i]) ++diff_bytes;
+    }
+    CHECK(diff_bytes <= 4);
+
+    WorldSnapshot cache_a = base;
+    ByteReader ra(for_a.data(), for_a.size());
+    REQUIRE(decode_delta_snapshot(ra, static_cast<uint32_t>(cur.tick), cache_a));
+    CHECK(cache_a.last_input_seq == seq_a);
+    WorldSnapshot cache_b = base;
+    ByteReader rb(for_b.data(), for_b.size());
+    REQUIRE(decode_delta_snapshot(rb, static_cast<uint32_t>(cur.tick), cache_b));
+    CHECK(cache_b.last_input_seq == seq_b);
+}
+
+TEST_CASE("delta with changed roster resends all players fully") {
+    WorldSnapshot base = sample_snapshot(); // 2 players
+    WorldSnapshot cur = base;
+    cur.tick = base.tick + 1;
+    cur.player_count = 3;
+    cur.players[2].id = 3;
+    cur.players[2].team = Team::Blue;
+    cur.players[2].motion.position = Vec2Fixed{500000, 400000};
+    cur.players[2].aim_angle = 1234;
+    cur.players[2].health = 100;
+    cur.players[2].alive = true;
+
+    std::vector<uint8_t> buf(512);
+    ByteWriter w(buf.data(), buf.size());
+    encode_delta_snapshot(w, cur, base);
+    REQUIRE(w.ok());
+
+    WorldSnapshot cache = base;
+    ByteReader r(buf.data(), w.size());
+    REQUIRE(decode_delta_snapshot(r, static_cast<uint32_t>(cur.tick), cache));
+    check_snap_eq(wire_granularity(cur), cache);
+}
+
+TEST_CASE("delta against a stale cache is rejected until the next keyframe") {
+    const WorldSnapshot base = sample_snapshot();
+    WorldSnapshot cur = base;
+    cur.tick = base.tick + 1;
+
+    std::vector<uint8_t> buf(512);
+    ByteWriter w(buf.data(), buf.size());
+    encode_delta_snapshot(w, cur, base);
+    REQUIRE(w.ok());
+
+    // Cache holds an older tick than the declared baseline -> packet loss
+    // happened somewhere; drop until the next keyframe.
+    WorldSnapshot stale = base;
+    stale.tick = base.tick - 5;
+    ByteReader r(buf.data(), w.size());
+    CHECK_FALSE(
+        decode_delta_snapshot(r, static_cast<uint32_t>(cur.tick), stale));
+
+    // Cache at the wrong future tick is equally unusable.
+    WorldSnapshot ahead = base;
+    ahead.tick = base.tick + 7;
+    ByteReader r2(buf.data(), w.size());
+    CHECK_FALSE(
+        decode_delta_snapshot(r2, static_cast<uint32_t>(cur.tick), ahead));
+}
+
+TEST_CASE("truncated or malformed deltas are dropped, never crash") {
+    const WorldSnapshot base = sample_snapshot();
+    WorldSnapshot cur = base;
+    cur.tick = base.tick + 1;
+    cur.players[0].motion.position.x += 640;
+    cur.score_red = 2;
+
+    uint8_t scratch[512];
+    ByteWriter w(scratch, sizeof(scratch));
+    encode_delta_snapshot(w, cur, base);
+    const size_t full = w.size();
+
+    // Truncate at every length: either it decodes (only possible at the
+    // full length) or it fails with underflow flagged, never crashing.
+    for (size_t cut = 0; cut < full; ++cut) {
+        std::vector<uint8_t> body(scratch, scratch + cut);
+        WorldSnapshot cache = base;
+        ByteReader r(body.data(), body.size());
+        if (decode_delta_snapshot(r, static_cast<uint32_t>(cur.tick), cache)) {
+            CHECK(cut >= full);
+        } else {
+            CHECK_FALSE(r.ok()); // truncated read must flag underflow
+        }
+    }
+
+    // Unknown header-mask bits are a protocol violation.
+    {
+        std::vector<uint8_t> body(scratch, scratch + full);
+        body[5] |= 0x80; // header_mask high bit unused
+        WorldSnapshot cache = base;
+        ByteReader r(body.data(), body.size());
+        CHECK_FALSE(
+            decode_delta_snapshot(r, static_cast<uint32_t>(cur.tick), cache));
+    }
+
+    // Unknown per-player field-mask bits likewise. This delta carries no
+    // changed header fields, so the layout before the first player record
+    // is fixed: u32 ack + u8 ticks_ago + u8 header_mask +
+    // u16 player_change_mask = 8 bytes; record starts with id (offset 8)
+    // then field_mask (offset 9).
+    {
+        WorldSnapshot cur3 = base;
+        cur3.tick = base.tick + 1;
+        cur3.players[0].motion.position.y += 320;
+        ByteWriter w3(scratch, sizeof(scratch));
+        encode_delta_snapshot(w3, cur3, base);
+        REQUIRE(w3.size() > 9);
+        std::vector<uint8_t> body3(scratch, scratch + w3.size());
+        body3[9] = static_cast<uint8_t>(body3[9] | 0xF0); // bits 4..7 unused
+        WorldSnapshot cache = base;
+        ByteReader r(body3.data(), body3.size());
+        CHECK_FALSE(
+            decode_delta_snapshot(r, static_cast<uint32_t>(cur3.tick), cache));
+    }
+
+    // Unknown flag-state value in a changed flag header field rejects.
+    {
+        std::vector<uint8_t> body(scratch, scratch + full);
+        // score_red change is in the payload; corrupt nothing there —
+        // instead build a fresh delta whose only change is flag_state_red,
+        // then poison the state byte.
+        WorldSnapshot cur2 = base;
+        cur2.tick = base.tick + 1;
+        cur2.flag_state_red = FlagState::AtBase; // baseline has it Dropped
+        ByteWriter w2(scratch, sizeof(scratch));
+        encode_delta_snapshot(w2, cur2, base);
+        std::vector<uint8_t> body2(scratch, scratch + w2.size());
+        REQUIRE(w2.size() > 8);
+        // Header fields follow header_mask at offset 6: state byte first.
+        body2[6] = 0x7F; // not a valid FlagState
+        WorldSnapshot cache = base;
+        ByteReader r(body2.data(), body2.size());
+        CHECK_FALSE(
+            decode_delta_snapshot(r, static_cast<uint32_t>(cur2.tick), cache));
     }
 }
 

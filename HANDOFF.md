@@ -34,7 +34,7 @@ client: `tools/loadgen.py`.
 
 ```
 TCP frame:    [u16 payload_len][u8 type][payload...]     (len EXCLUDES header)
-UDP datagram: [u16 magic=0x4346][u8 version=1][u8 type][u32 tick][payload...]
+UDP datagram: [u16 magic=0x4346][u8 version=2][u8 type][u32 tick][payload...]
               (8-byte header on EVERY UDP packet; wrong magic/version is
                dropped server-side without any response)
 ```
@@ -55,6 +55,7 @@ UDP datagram: [u16 magic=0x4346][u8 version=1][u8 type][u32 tick][payload...]
 | 10 | SHOT_FIRED | UDP | S→all (cosmetic) |
 | 11–17 | PLAYER_KILLED, PLAYER_RESPAWNED, FLAG_PICKED_UP, FLAG_DROPPED, FLAG_RETURNED, FLAG_CAPTURED, MATCH_END | TCP | S→all |
 | 18 | HEARTBEAT | TCP | C→S every 1s |
+| 19 | DELTA_SNAPSHOT | UDP | S→all (delta vs previous publish; protocol version 2) |
 
 ### Payload layouts (in wire order)
 
@@ -91,7 +92,31 @@ FLAG_RETURNED   u8 flag_team, u8 player_id, u32 tick
 FLAG_CAPTURED   u8 flag_team, u8 player_id, u32 tick
 MATCH_END       u8 winning_team, u8 score_red, u8 score_blue
 HEARTBEAT       (empty)
+DELTA_SNAPSHOT  u32 last_input_seq          <- PATCHED PER RECIPIENT (offset 0!)
+                u8  baseline_ticks_ago      <- baseline = hdr tick - this
+                u8  header_mask             bit0 score_red, bit1 score_blue,
+                                            bit2 seconds_remaining,
+                                            bit3 flag red (state+carrier),
+                                            bit4 flag blue, bit5 player_count
+                [changed header fields in bit order]
+                u16 player_change_mask      bit i = player slot i changed
+                per changed player:
+                  u8 id
+                  u8 field_mask             bit0 pos(2xi16), bit1 aim(u16),
+                                            bit2 health(u8), bit3 flags(u8)
+                  [only the set fields]
 ```
+
+### Delta snapshot rules (protocol version 2)
+
+- The client caches the last applied snapshot; each DELTA_SNAPSHOT is decoded
+  onto that cache and then surfaces as a normal full `WorldSnapshot` —
+  prediction/interpolation code does not change.
+- Baseline mismatch (a lost datagram upstream) → the delta is dropped; updates
+  stall until the next full WORLD_SNAPSHOT keyframe (every 10th publish,
+  ~333 ms at snapshot-rate 30). No client action needed.
+- Reference decode: `client/net_client.cpp` (`dispatch_udp_payload`);
+  codec: `shared/protocol.cpp` (`encode/decode_delta_snapshot`).
 
 ### Positions: fixed-point scales
 

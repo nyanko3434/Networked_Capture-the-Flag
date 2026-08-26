@@ -54,6 +54,13 @@ public:
         snapshot_hz_ = hz > 0 ? hz : config::kTickRateHz;
     }
 
+    // Delta snapshot publishing (--snapshots full|delta). When on, only
+    // every config::kSnapshotKeyframeInterval-th publish is a full
+    // WORLD_SNAPSHOT; the rest are DELTA_SNAPSHOTs against the previous
+    // publish. Default: on.
+    void set_delta_snapshots(bool on) { delta_snapshots_ = on; }
+    bool delta_snapshots() const { return delta_snapshots_; }
+
     // Flag state as seen by tests (mirrors what snapshots publish).
     FlagState flag_state(Team team) const;
     uint8_t flag_carrier(Team team) const;
@@ -126,6 +133,12 @@ private:
     int wake_fd_ = -1;
     int tick_hz_ = config::kTickRateHz;
     int snapshot_hz_ = config::kTickRateHz;
+    bool delta_snapshots_ = true;
+    // Baseline for the next delta publish: the previous published snapshot
+    // (full or delta — clients cache both). Valid once one has been sent.
+    WorldSnapshot prev_published_;
+    bool have_published_ = false;
+    uint32_t snapshots_published_ = 0; // counts publishes, not ticks
     uint32_t current_tick_ = 0;
     bool match_over_ = false;
     bool running_ = false;

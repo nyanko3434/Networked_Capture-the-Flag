@@ -147,3 +147,30 @@ Session notes (2026-08-25, client-integration debugging):
   no desync-path impact.
 - Test counts grew since the status line above: currently 120 cases /
   12,229 assertions green.
+
+Session notes (2026-08-26, network optimization — delta snapshots):
+- Branch `optimization/network`. DELTA_SNAPSHOT (type 19) implemented:
+  field-level diffs vs the previous publish; full WORLD_SNAPSHOT keyframe
+  every 10th publish (`config::kSnapshotKeyframeInterval`). Server flag
+  `--snapshots delta|full` (default delta). Protocol version bumped 1→2
+  (stale v1 binaries now get JOIN_REJECT BadVersion).
+- Loss model: client caches last applied snapshot; baseline mismatch drops
+  deltas until the next keyframe (~333 ms worst case at 30 Hz). No NACKs.
+- Files touched: shared/protocol.{h,cpp} (codec + version), game_config.h
+  (keyframe interval), queues.h (UdpDeltaSnapshot event), sim.{h,cpp}
+  (baseline + keyframe cadence in publish()), broadcast.{h,cpp} (type-byte
+  param, default preserves old behavior), net_server.{h,cpp} (routing +
+  udp_delta_snapshots_sent counter), main.cpp (--snapshots flag),
+  client/net_client.{h,cpp} (delta decode onto cache; dispatch_udp_payload
+  gained a tick param).
+- Tests grew to 135 cases / 16,411 assertions, green normal + ASan. ASan
+  also caught a pre-existing test bug: the 64KB-pending-cap test claimed
+  payload_size=1024 on the 512-byte OutboundEvent array (fixed in test).
+- tools/loadgen.py: VERSION=2, counts keyframes/deltas/udp_bytes, host
+  detection from LOBBY_STATE (was: bot0 assumed host — racy under
+  concurrent connects, matches silently never started), JOIN_ACCEPT frame
+  parse no longer discards bytes after it (TCP stream desync fix), bots
+  move intermittently (~50% duty) with frozen aim while idle.
+- New tools/bench_bandwidth.sh -> docs/benchmark_snapshots.md:
+  full 3.42 vs delta 1.85 KiB/s/client at n=10 (~46% reduction; scales
+  with idle time — constant motion is the pathological worst case ~15%).
