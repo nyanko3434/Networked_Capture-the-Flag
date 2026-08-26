@@ -140,8 +140,30 @@ Headless bots (no window needed):
 ./build/ctf_bot --host 127.0.0.1 --port 7777 --count 9
 ```
 
-LAN play: replace `127.0.0.1` with the server machine's LAN IP
-(`ip addr` to find it). Port 7777/tcp must be reachable.
+LAN play (two machines on the same Wi-Fi):
+
+1. **Server machine** — find its LAN IP and start the server:
+   ```bash
+   ip addr            # look for the wlan0 inet address, e.g. 192.168.1.10
+   ./build/ctf_server --port 7777 --tick 30
+   ```
+   The server binds 0.0.0.0, so port **7777/tcp AND the same-numbered
+   udp port must be reachable**. On Arch with no firewall this works out
+   of the box; if `iptables`/`firewalld`/`ufw` is active:
+   ```bash
+   sudo firewall-cmd --add-port=7777/tcp --add-port=7777/udp   # firewalld
+   # or: sudo ufw allow 7777/tcp; sudo ufw allow 7777/udp
+   ```
+2. **Client machine** — build the same branch there (`docs/manual.md §2`),
+   then connect using the server's IP:
+   ```bash
+   ./build/ctf_client --host 192.168.1.10 --port 7777 --name nayan
+   ```
+3. Quick reachability check before blaming the game:
+   `nc -zv 192.168.1.10 7777` from the client should report "open".
+
+Both machines must run binaries built from protocol-compatible sources
+(the handshake rejects stale v1/v2 mismatches cleanly).
 
 ---
 
