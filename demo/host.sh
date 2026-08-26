@@ -15,8 +15,8 @@ if [ ! -f "$BUILD_DIR/ctf_server" ]; then
     exit 1
 fi
 
-# Get hotspot/LAN IP
-LAN_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -1)
+# Get hotspot/LAN IP — prefer non-loopback, non-docker, non-WSL-internal addresses
+LAN_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | grep -v '^10\.255\.' | grep -v '^172\.1[7-9]\.' | grep -v '^172\.2[0-9]\.' | grep -v '^172\.3[0-1]\.' | head -1)
 [ -z "$LAN_IP" ] && LAN_IP="127.0.0.1"
 
 echo ""
