@@ -1,8 +1,8 @@
 # manual.md — Build & Run Guide
 
 Practical instructions for building, testing, and running this project on
-**Arch Linux**. For design details see `README.md`; for task tracking see
-`implementation_guide.md` and `AGENTS.md`.
+**Arch Linux**. For design details see `docs/README.md`; for task tracking
+see `docs/implementation_guide.md` and `AGENTS.md` (repo root).
 
 ---
 
