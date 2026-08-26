@@ -71,12 +71,17 @@ Controls:
 Requires: Linux (Ubuntu/Debian/Fedora/Arch)
 README
 
-# Create zip
+# Create archive (tar.gz, always available without extra packages)
 cd "$OUT_DIR"
-rm -f ctf-client-linux.zip
-zip -r ctf-client-linux.zip ctf-client-linux/
+rm -f ctf-client-linux.tar.gz
+tar czf ctf-client-linux.tar.gz ctf-client-linux/
 rm -rf "$STAGE"
 
 echo ""
-echo "Packaged: $OUT_DIR/ctf-client-linux.zip"
+echo "Packaged: $OUT_DIR/ctf-client-linux.tar.gz"
 echo "Upload to GitHub Releases for easy distribution."
+echo ""
+echo "Teacher runs:"
+echo "  tar xzf ctf-client-linux.tar.gz"
+echo "  cd ctf-client-linux"
+echo "  ./join.sh <server-ip>"

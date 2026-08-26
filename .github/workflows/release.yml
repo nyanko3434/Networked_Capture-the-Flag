@@ -57,10 +57,10 @@ jobs:
           EOF
 
           cd demo/dist
-          zip -r ctf-client-linux.zip ctf-client-linux/
+          tar czf ctf-client-linux.tar.gz ctf-client-linux/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: demo/dist/ctf-client-linux.zip
+          files: demo/dist/ctf-client-linux.tar.gz
           generate_release_notes: true
