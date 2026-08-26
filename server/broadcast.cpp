@@ -26,7 +26,8 @@ int broadcast_tcp_event(ClientRegistry& registry,
 
 void send_udp_snapshots(ClientRegistry& registry, int udp_fd,
                         const uint8_t* body, size_t body_len,
-                        const uint32_t* acks, uint32_t tick) {
+                        const uint32_t* acks, uint32_t tick,
+                        uint8_t udp_msg_type) {
     if (udp_fd < 0 || body_len < 4) return;
 
     // 8-byte UDP header (README §5.3): magic, version, type, tick.
@@ -38,7 +39,7 @@ void send_udp_snapshots(ClientRegistry& registry, int udp_fd,
     dgram[0] = protocol::kMagic >> 8;
     dgram[1] = protocol::kMagic & 0xFF;
     dgram[2] = protocol::kProtocolVersion;
-    dgram[3] = static_cast<uint8_t>(protocol::MessageType::WorldSnapshot);
+    dgram[3] = udp_msg_type;
     dgram[4] = static_cast<uint8_t>(tick >> 24);
     dgram[5] = static_cast<uint8_t>(tick >> 16);
     dgram[6] = static_cast<uint8_t>(tick >> 8);

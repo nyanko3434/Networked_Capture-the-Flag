@@ -135,3 +135,51 @@ TEST_CASE("udp snapshots differ only in the patched 4-byte field") {
 
     close(udp_fd);
 }
+
+TEST_CASE("udp delta snapshots carry the delta type byte and patched ack") {
+    UdpSink sink;
+    ClientRegistry reg;
+    ClientEntry* a = attach_udp_client(reg, 1, sink);
+
+    // Delta body: cur differs from base in one player's position.
+    WorldSnapshot base;
+    base.tick = 100;
+    base.player_count = 1;
+    WorldSnapshot cur = base;
+    cur.tick = 101;
+    cur.players[0].id = 1;
+    cur.players[0].motion.position = Vec2Fixed{1600 * 4, 320 * 8};
+
+    std::vector<uint8_t> body(512);
+    ByteWriter w(body.data(), body.size());
+    encode_delta_snapshot(w, cur, base);
+    body.resize(w.size());
+
+    uint32_t acks[config::kMaxPlayers] = {};
+    acks[a->player_id] = 42;
+
+    int udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    REQUIRE(udp_fd >= 0);
+
+    send_udp_snapshots(reg, udp_fd, body.data(), body.size(), acks,
+                       /*tick=*/101,
+                       static_cast<uint8_t>(MessageType::DeltaSnapshot));
+
+    std::vector<uint8_t> buf(2048);
+    ssize_t n = recv(sink.fd, buf.data(), buf.size(), 0);
+    REQUIRE(n > 0);
+    const size_t hdr = config::kUdpHeaderBytes;
+    REQUIRE(static_cast<size_t>(n) == hdr + body.size());
+
+    CHECK(buf[3] == static_cast<uint8_t>(MessageType::DeltaSnapshot));
+    ByteReader tr(buf.data() + 4, 4);
+    CHECK(tr.u32() == 101);
+
+    // Patched ack at payload offset 0; the rest matches the shared body.
+    ByteReader ar(buf.data() + hdr, buf.size() - hdr);
+    CHECK(ar.u32() == 42);
+    CHECK(std::memcmp(buf.data() + hdr + 4, body.data() + 4,
+                      body.size() - 4) == 0);
+
+    close(udp_fd);
+}

@@ -539,6 +539,16 @@ void NetServer::handle_wake() {
                                    ev.payload_len(), ev.acks, ev.tick);
                 ++udp_snapshots_sent_;
                 break;
+            case OutboundEventType::UdpDeltaSnapshot:
+                // Delta bodies keep last_input_seq at payload offset 0, so
+                // the same per-recipient patch path applies; only the
+                // transport-header type byte differs.
+                send_udp_snapshots(registry_, udp_fd_, ev.payload_ptr(),
+                                   ev.payload_len(), ev.acks, ev.tick,
+                                   static_cast<uint8_t>(
+                                       protocol::MessageType::DeltaSnapshot));
+                ++udp_delta_snapshots_sent_;
+                break;
             case OutboundEventType::TcpBroadcast:
                 // Frame it once ([u16 len][u8 type][payload], README §5.3):
                 // sim events arrive as [u8 type][encoded fields].

@@ -544,21 +544,39 @@ void Sim::publish() {
 
     snapshot_ = snap;
 
-    // Serialize the body ONCE; broadcast patches last_input_seq (offset 0)
-    // per recipient (README §5.5). --snapshot-rate decimates the UDP sends
-    // without touching simulation fidelity.
+    // Serialize ONCE per publish; broadcast patches last_input_seq (offset
+    // 0) per recipient (README §5.5). --snapshot-rate decimates the UDP
+    // sends without touching simulation fidelity. Delta mode (--snapshots
+    // delta) replaces most publishes with a DELTA_SNAPSHOT against the
+    // previous publish; every kSnapshotKeyframeInterval-th publish — and
+    // the very first, before any client cache exists — is a full snapshot.
     const int div = tick_hz_ / snapshot_hz_;
     if (div <= 1 || current_tick_ % static_cast<uint32_t>(div) == 0) {
+        const bool keyframe =
+            !delta_snapshots_ || !have_published_ ||
+            snapshots_published_ %
+                    static_cast<uint32_t>(config::kSnapshotKeyframeInterval) ==
+                0;
+
         OutboundEvent ev;
-        ev.type = OutboundEventType::UdpSnapshot;
+        ev.type = keyframe ? OutboundEventType::UdpSnapshot
+                           : OutboundEventType::UdpDeltaSnapshot;
         ByteWriter w(ev.payload_data.data(), ev.payload_data.size());
-        protocol::encode_world_snapshot(w, snap);
+        if (keyframe) {
+            protocol::encode_world_snapshot(w, snap);
+        } else {
+            protocol::encode_delta_snapshot(w, snap, prev_published_);
+        }
         ev.payload_size = static_cast<uint16_t>(w.size());
         for (int id = 0; id < config::kMaxPlayers; ++id) {
             ev.acks[id] = player_acks_[id];
         }
         ev.tick = current_tick_;
         outbound_.push(ev);
+
+        prev_published_ = snap;
+        have_published_ = true;
+        ++snapshots_published_;
     }
 
     // Wake the network thread immediately after publishing (README §3.2).

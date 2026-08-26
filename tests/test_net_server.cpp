@@ -498,14 +498,16 @@ TEST_CASE("pending output beyond 64KB disconnects a slow client") {
 
     // Pump > 64KB of broadcast events without ever reading them client-
     // side faster than the cap check: the cap fires on buffered size
-    // regardless of kernel buffers.
+    // regardless of kernel buffers. Each event fills the whole 512-byte
+    // payload_data array (payload_size must never claim more than that).
     OutboundEvent ev;
     ev.type = OutboundEventType::TcpBroadcast;
     std::fill(ev.payload_data.begin(), ev.payload_data.end(), 0xAB);
-    ev.payload_size = 1024;
+    ev.payload_size = static_cast<uint16_t>(ev.payload_data.size());
+    const int event_bytes = static_cast<int>(ev.payload_size);
     for (int i = 0; i < static_cast<int>(
-                        config::kTcpPendingBufferCapBytes / 1024) +
-                    4;
+                        config::kTcpPendingBufferCapBytes / event_bytes) +
+                    8;
          ++i) {
         h.outbound.push(ev);
     }
@@ -592,4 +594,32 @@ TEST_CASE("outbound counters track snapshots and fanned-out events") {
     h.wake();
     std::this_thread::sleep_for(std::chrono::milliseconds(kPollTimeoutMs * 3));
     CHECK(h.server->tcp_events_fanned_out() == tcp_before + 1);
+}
+
+TEST_CASE("delta snapshot events route through the UDP path and count") {
+    ServerHarness h;
+    TestClient c;
+    c.connect_to(h.server->local_port());
+    MsgJoinLobby join{};
+    std::strcpy(join.name, "delta");
+    REQUIRE(c.send_frame(MessageType::JoinLobby, join, encode_join_lobby));
+    FrameView accept;
+    REQUIRE(wait_for_frame(c, MessageType::JoinAccept, accept, 1000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(kPollTimeoutMs * 2));
+
+    const uint64_t full_before = h.server->udp_snapshots_sent();
+    const uint64_t delta_before = h.server->udp_delta_snapshots_sent();
+
+    for (int i = 0; i < 3; ++i) {
+        OutboundEvent ev;
+        ev.type = OutboundEventType::UdpDeltaSnapshot;
+        std::fill(ev.payload_data.begin(), ev.payload_data.end(), 0x33);
+        ev.payload_size = 32;
+        h.outbound.push(ev);
+    }
+    h.wake();
+    std::this_thread::sleep_for(std::chrono::milliseconds(kPollTimeoutMs * 3));
+
+    CHECK(h.server->udp_delta_snapshots_sent() == delta_before + 3);
+    CHECK(h.server->udp_snapshots_sent() == full_before);
 }
