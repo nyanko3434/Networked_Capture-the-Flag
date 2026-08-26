@@ -204,7 +204,7 @@ PLAYER_INPUT (seq 42, holding RIGHT+FIRE, aim ~90deg right-ish):
 | `tests/test_net_server.cpp` | Exact frames the server expects/emits, incl. edge cases |
 | `shared/protocol.h/.cpp` | Frozen API + reference encode/decode |
 | `tests/test_protocol.cpp` | Round-trip examples for every message |
-| `implementation_guide.md` §3 | Your full task checklist (§3.1–§3.6) |
+| `implementation_guide.md` §3 (in `docs/`) | Your full task checklist (§3.1–§3.6) |
 
 ---
 

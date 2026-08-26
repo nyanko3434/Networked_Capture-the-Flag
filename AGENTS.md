@@ -7,9 +7,9 @@ server (`server/`); Nayan Khusu owns the client (`client/`, `bot/`, tooling).
 
 | File | Purpose |
 |---|---|
-| `README.md` | Single source of truth for every design decision. If a question isn't answered by a task's referenced section, the answer is here. |
-| `implementation_guide.md` | Ordered task checklist per owner with acceptance criteria stated as concrete tests. Work is tracked against §1 (shared) and §2 (Bibidh — server). |
-| `AGENTS.md` | This file — execution plan, workflow rules, progress state. |
+| `docs/README.md` | Single source of truth for every design decision. If a question isn't answered by a task's referenced section, the answer is here. |
+| `docs/implementation_guide.md` | Ordered task checklist per owner with acceptance criteria stated as concrete tests. Work is tracked against §1 (shared) and §2 (Bibidh — server). |
+| `AGENTS.md` | This file — execution plan, workflow rules, progress state. Kept at the repo root so AI coding tools auto-discover it. |
 
 ## Git workflow (imperative — no exceptions)
 
@@ -138,7 +138,7 @@ Session notes (2026-08-25, client-integration debugging):
   Permanent local clone at ~/Documents/Projects/temp/raylib-test; fresh
   configures need -DFETCHCONTENT_SOURCE_DIR_RAYLIB=<that path> (cached in
   build/CMakeCache.txt afterwards). Full run instructions live in
-  manual.md — keep it current when build/run steps change.
+  docs/manual.md — keep it current when build/run steps change.
 - Combat fixes (branch fix/shot-origin-and-ray-direction, PR into dev):
   SHOT_FIRED origin was the box top-left corner, not the center the aim
   angle and ray are computed from; cast_ray quantized directions through a
