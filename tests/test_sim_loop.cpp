@@ -116,7 +116,12 @@ TEST_CASE("snapshot-rate decimation reduces UDP publishes, not ticks") {
         OutboundEvent ev;
         int n = 0;
         while (out.pop(ev)) {
-            if (ev.type == OutboundEventType::UdpSnapshot) ++n;
+            // Count publishes of either kind: decimation governs publish
+            // frequency, not full-vs-delta encoding.
+            if (ev.type == OutboundEventType::UdpSnapshot ||
+                ev.type == OutboundEventType::UdpDeltaSnapshot) {
+                ++n;
+            }
         }
         return n;
     };

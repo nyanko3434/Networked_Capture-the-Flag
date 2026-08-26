@@ -118,6 +118,12 @@ constexpr size_t kTcpPendingBufferCapBytes = 64 * 1024;
 // Heartbeat: client sends HEARTBEAT over TCP every 1 s (README §5.4).
 constexpr int32_t kHeartbeatIntervalSec = 1;
 
+// Delta snapshots (--snapshots delta): a full WORLD_SNAPSHOT keyframe is
+// published every Nth snapshot; the publishes in between are DELTA_SNAPSHOTs
+// computed against the previous publish. A lost delta leaves the client
+// waiting at most this many snapshot intervals for the next keyframe.
+constexpr int32_t kSnapshotKeyframeInterval = 10;
+
 // ---------------------------------------------------------------------------
 // CLIENT-ONLY (README §8: one table entry, plus additional constants needed
 // by client/ code).

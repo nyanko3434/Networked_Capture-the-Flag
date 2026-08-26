@@ -16,8 +16,11 @@
 namespace ctf::protocol {
 
 // UDP header (README §5.3): 8 bytes, present on every UDP datagram.
+// Version 2 adds DELTA_SNAPSHOT (type 19); v1 peers are rejected at the
+// handshake with JoinRejectReason::BadVersion so a stale LAN binary can
+// never mis-decode the new message.
 constexpr uint16_t kMagic = 0x4346;
-constexpr uint8_t kProtocolVersion = 1;
+constexpr uint8_t kProtocolVersion = 2;
 
 struct UdpHeader {
     uint16_t magic = kMagic;
@@ -49,6 +52,7 @@ enum class MessageType : uint8_t {
     FlagCaptured = 16,      // TCP  S->all
     MatchEnd = 17,          // TCP  S->all
     Heartbeat = 18,         // TCP  C->S
+    DeltaSnapshot = 19,    // UDP  S->all (delta vs previous snapshot)
 };
 
 // ---------------------------------------------------------------------------
@@ -192,6 +196,22 @@ bool decode_player_input(ByteReader& r, MsgPlayerInput& out);
 // (README §5.5); the body is otherwise serialized once per tick.
 void encode_world_snapshot(ByteWriter& w, const WorldSnapshot& msg);
 bool decode_world_snapshot(ByteReader& r, WorldSnapshot& out);
+
+// DELTA_SNAPSHOT (type 19): field-level diff of `current` against
+// `baseline` (the previous published snapshot). The payload starts with the
+// per-recipient last_input_seq at offset 0, exactly like WORLD_SNAPSHOT, so
+// broadcast.cpp's 4-byte patch works on both.
+//
+// The decoder applies the delta onto `cache` (the client's copy of the
+// previous snapshot) and stamps it with `current_tick` from the UDP header.
+// It returns false — leaving `cache` untouched — when the packet is
+// malformed OR when `cache.tick` does not equal
+// `current_tick - baseline_ticks_ago`: a lost datagram makes later deltas
+// unappliable, so the caller drops them until the next full keyframe.
+void encode_delta_snapshot(ByteWriter& w, const WorldSnapshot& current,
+                           const WorldSnapshot& baseline);
+bool decode_delta_snapshot(ByteReader& r, uint32_t current_tick,
+                           WorldSnapshot& cache);
 
 void encode_shot_fired(ByteWriter& w, const MsgShotFired& msg);
 bool decode_shot_fired(ByteReader& r, MsgShotFired& out);

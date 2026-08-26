@@ -60,7 +60,8 @@ struct InboundCommand {
 
 enum class OutboundEventType : uint8_t {
     TcpBroadcast,
-    UdpSnapshot,
+    UdpSnapshot,      // full WORLD_SNAPSHOT body (keyframe)
+    UdpDeltaSnapshot, // DELTA_SNAPSHOT body vs the previous publish
     UdpEvent, // cosmetic SHOT_FIRED tracers (loss-tolerant)
 };
 
