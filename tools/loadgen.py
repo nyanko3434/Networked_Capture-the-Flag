@@ -3,8 +3,9 @@
 
 Spawns N protocol-speaking clients over loopback: TCP handshake, host
 START_REQUEST, then every client sends UDP_HELLO and PLAYER_INPUT at ~30 Hz
-while recording WORLD_SNAPSHOT arrivals. Prints per-client stats as JSON so
-the poll-vs-epoll comparison can be scripted.
+while recording snapshot arrivals (WORLD_SNAPSHOT keyframes plus
+DELTA_SNAPSHOTs) and per-client UDP byte totals. Prints per-client stats as
+JSON so the poll-vs-epoll and full-vs-delta comparisons can be scripted.
 """
 
 import argparse
@@ -15,11 +16,12 @@ import threading
 import time
 
 MAGIC = 0x4346
-VERSION = 1
+VERSION = 2
 
 JOIN_LOBBY, JOIN_ACCEPT, JOIN_REJECT = 1, 2, 3
 LOBBY_STATE, START_REQUEST, GAME_START = 4, 5, 6
-UDP_HELLO, PLAYER_INPUT, WORLD_SNAPSHOT = 7, 8, 9
+UDP_HELLO, PLAYER_INPUT, WORLD_SNAPSHOT, SHOT_FIRED = 7, 8, 9, 10
+DELTA_SNAPSHOT = 19
 
 
 def udp_header(mtype, tick):
@@ -31,7 +33,8 @@ def tcp_frame(mtype, payload):
 
 
 class Client(threading.Thread):
-    def __init__(self, idx, host, tcp_port, udp_port, duration, results):
+    def __init__(self, idx, host, tcp_port, udp_port, duration, results,
+                 expected_count=10):
         super().__init__(daemon=True)
         self.idx = idx
         self.host = host
@@ -39,9 +42,11 @@ class Client(threading.Thread):
         self.udp_port = udp_port
         self.duration = duration
         self.results = results
+        self.count = expected_count
 
     def run(self):
-        info = {"snapshots": 0, "tcp_frames": {}, "other_udp": {}}
+        info = {"snapshots": 0, "keyframes": 0, "deltas": 0,
+                "udp_bytes": 0, "tcp_frames": {}, "other_udp": {}}
         snap_times = []
         tcp_acc = b""
         stop = threading.Event()
@@ -55,20 +60,35 @@ class Client(threading.Thread):
             deadline = time.time() + 5
             player_id = token = None
             while time.time() < deadline:
-                d = tcp.recv(256)
+                d = tcp.recv(4096)
                 if not d:
                     break
                 acc += d
-                if len(acc) >= 10 and acc[2] == JOIN_ACCEPT:
+                # Frame-by-frame so JOIN_ACCEPT is found wherever it sits
+                # and any bytes AFTER it survive into tcp_acc (with 10
+                # concurrent joins, LOBBY_STATE broadcasts race the accept).
+                while len(acc) >= 3:
                     plen = struct.unpack(">H", acc[:2])[0]
-                    if len(acc) >= 3 + plen:
-                        player_id, token, _u = struct.unpack(
-                            ">BIH", acc[3:10])
+                    if len(acc) < 3 + plen:
                         break
+                    ftype = acc[2]
+                    payload = acc[3:3 + plen]
+                    acc = acc[3 + plen:]
+                    if ftype == JOIN_ACCEPT and len(payload) >= 7:
+                        player_id, token, _u = struct.unpack(
+                            ">BIH", payload[:7])
+                    elif ftype == JOIN_REJECT:
+                        info["error"] = "JOIN_REJECT during handshake"
+                        self.results[self.idx] = info
+                        return
+                if player_id is not None:
+                    break
             if player_id is None:
                 info["error"] = "no JOIN_ACCEPT"
                 self.results[self.idx] = info
                 return
+            # Anything buffered past JOIN_ACCEPT stays in the stream.
+            tcp_acc = acc
 
             udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             udp.bind(("127.0.0.1", 0))
@@ -80,19 +100,30 @@ class Client(threading.Thread):
                 udp.sendto(hello, (self.host, self.udp_port))
                 time.sleep(0.02)
 
-            # Host starts the match once everyone has joined.
-            if self.idx == 0:
-                time.sleep(0.6)
-                tcp.sendall(tcp_frame(START_REQUEST, b""))
+            # Whoever the server actually made HOST starts the match once
+            # the whole roster is in. ("First joiner is host" is
+            # nondeterministic under concurrent connects — never assume
+            # idx 0 won that race.)
+            started = threading.Event()
 
             seq_holder = [0]
 
             def sender():
+                aim = 0
                 while not stop.is_set():
                     s = seq_holder[0]
+                    # Intermittent movement with a per-bot phase: ~50% of
+                    # each bot's ticks are idle (aiming/camping), like real
+                    # play. Constant motion would be the pathological
+                    # worst case for delta compression. Aim is frozen while
+                    # idle — a still player changes nothing.
+                    if (s + self.idx * 17) % 60 < 30:
+                        buttons = 1 << (s % 4)
+                        aim = s * 97 % 65536
+                    else:
+                        buttons = 0
                     body = (struct.pack(">BIIB", player_id, token, s, 1) +
-                            struct.pack(">BH", 1 << (s % 4),
-                                        s * 97 % 65536))
+                            struct.pack(">BH", buttons, aim))
                     udp.sendto(udp_header(PLAYER_INPUT, s) + body,
                                (self.host, self.udp_port))
                     seq_holder[0] += 1
@@ -106,9 +137,16 @@ class Client(threading.Thread):
                 try:
                     data, _ = udp.recvfrom(2048)
                     if len(data) >= 8:
+                        info["udp_bytes"] += len(data)
                         mtype = data[3]
-                        if mtype == WORLD_SNAPSHOT:
+                        if mtype in (WORLD_SNAPSHOT, DELTA_SNAPSHOT):
                             snap_times.append(time.time())
+                            if mtype == WORLD_SNAPSHOT:
+                                info["keyframes"] = \
+                                    info.get("keyframes", 0) + 1
+                            else:
+                                info["deltas"] = \
+                                    info.get("deltas", 0) + 1
                         else:
                             info["other_udp"][mtype] = \
                                 info["other_udp"].get(mtype, 0) + 1
@@ -124,8 +162,21 @@ class Client(threading.Thread):
                             plen = struct.unpack(">H", tcp_acc[:2])[0]
                             if len(tcp_acc) < 3 + plen:
                                 break
-                            info["tcp_frames"][tcp_acc[2]] = \
-                                info["tcp_frames"].get(tcp_acc[2], 0) + 1
+                            ftype = tcp_acc[2]
+                            payload = tcp_acc[3:3 + plen]
+                            info["tcp_frames"][ftype] = \
+                                info["tcp_frames"].get(ftype, 0) + 1
+                            # Host: START_REQUEST once the roster is full.
+                            if (ftype == LOBBY_STATE and not started.is_set()
+                                    and len(payload) >= 1):
+                                pcnt = payload[0]
+                                if (pcnt == self.count
+                                        and len(payload) >= 2 + pcnt * 17):
+                                    host_id = payload[1 + pcnt * 17]
+                                    if host_id == player_id:
+                                        tcp.sendall(
+                                            tcp_frame(START_REQUEST, b""))
+                                        started.set()
                             tcp_acc = tcp_acc[3 + plen:]
                 except socket.timeout:
                     pass
@@ -160,7 +211,7 @@ def main():
     results = {}
     threads = [
         Client(i, args.host, args.port, args.udp_port, args.duration,
-               results)
+               results, expected_count=args.count)
         for i in range(args.count)
     ]
     t0 = time.time()
